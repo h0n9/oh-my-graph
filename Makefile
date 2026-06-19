@@ -18,7 +18,7 @@ build:
 
 install: _require_macos build
 	@echo "→ Installing binary to $(INSTALL_DIR)/$(BINARY)"
-	install -m 755 $(BINARY) $(INSTALL_DIR)/$(BINARY)
+	sudo install -m 755 $(BINARY) $(INSTALL_DIR)/$(BINARY)
 	@echo "→ Writing plist to $(PLIST_PATH)"
 	@mkdir -p $(HOME)/Library/LaunchAgents $(HOME)/Library/Logs
 	@printf '%s\n' \
@@ -58,7 +58,8 @@ uninstall: _require_macos
 		echo "→ Stopping and unregistering service"; \
 		launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true; \
 	fi
-	@rm -f $(PLIST_PATH) $(INSTALL_DIR)/$(BINARY)
+	@sudo rm -f $(INSTALL_DIR)/$(BINARY)
+	@rm -f $(PLIST_PATH)
 	@echo "✓ oh-my-graph uninstalled"
 
 start: _require_macos
