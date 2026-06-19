@@ -2,6 +2,29 @@
 
 A knowledge graph MCP server for AI agents. Store, share, and traverse structured knowledge across sessions and agents using a simple append-only WAL.
 
+## Quickstart
+
+**macOS** — installs as a launchd service that starts automatically on login:
+
+```bash
+git clone https://github.com/h0n9/oh-my-graph
+cd oh-my-graph
+make install    # build, install to /usr/local/bin, register & start launchd service
+```
+
+Manage the service:
+
+```bash
+make start      # start the service
+make stop       # stop the service
+make restart    # restart the service
+make status     # show launchd service status
+make logs       # tail ~/Library/Logs/oh-my-graph.log
+make uninstall  # stop, remove binary and plist
+```
+
+The server runs on port **7780** by default. Point your MCP client at `http://localhost:7780/mcp`.
+
 ## Overview
 
 `oh-my-graph` runs as an HTTP server that exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) interface. Multiple AI agents connect to a single server instance and share knowledge organized into **topics**.
