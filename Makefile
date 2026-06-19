@@ -5,12 +5,18 @@ PLIST_LABEL := com.h0n9.oh-my-graph
 PLIST_PATH  := $(HOME)/Library/LaunchAgents/$(PLIST_LABEL).plist
 LOG_PATH    := $(HOME)/Library/Logs/oh-my-graph.log
 
-.PHONY: build install uninstall start stop restart status logs clean
+UNAME := $(shell uname)
+
+.PHONY: build install uninstall start stop restart status logs clean _require_macos
+
+_require_macos:
+	@test "$(UNAME)" = "Darwin" || \
+		(echo "Error: this target requires macOS (detected: $(UNAME))"; exit 1)
 
 build:
 	go build -o $(BINARY) ./cmd/oh-my-graph/
 
-install: build
+install: _require_macos build
 	@echo "→ Installing binary to $(INSTALL_DIR)/$(BINARY)"
 	install -m 755 $(BINARY) $(INSTALL_DIR)/$(BINARY)
 	@echo "→ Writing plist to $(PLIST_PATH)"
@@ -47,7 +53,7 @@ install: build
 	fi
 	@echo "✓ oh-my-graph running on port $(PORT)"
 
-uninstall:
+uninstall: _require_macos
 	@if launchctl list $(PLIST_LABEL) >/dev/null 2>&1; then \
 		echo "→ Stopping and unregistering service"; \
 		launchctl bootout gui/$$(id -u)/$(PLIST_LABEL) 2>/dev/null || true; \
@@ -55,19 +61,19 @@ uninstall:
 	@rm -f $(PLIST_PATH) $(INSTALL_DIR)/$(BINARY)
 	@echo "✓ oh-my-graph uninstalled"
 
-start:
+start: _require_macos
 	launchctl kickstart gui/$$(id -u)/$(PLIST_LABEL)
 
-stop:
+stop: _require_macos
 	launchctl kill SIGTERM gui/$$(id -u)/$(PLIST_LABEL)
 
-restart:
+restart: _require_macos
 	launchctl kickstart -k gui/$$(id -u)/$(PLIST_LABEL)
 
-status:
+status: _require_macos
 	@launchctl list $(PLIST_LABEL) 2>/dev/null || echo "Service not registered"
 
-logs:
+logs: _require_macos
 	tail -f $(LOG_PATH)
 
 clean:
