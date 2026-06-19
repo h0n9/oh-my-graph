@@ -103,7 +103,7 @@ Each line is a WAL record:
 | `get_topic` | `(topic)` | `{last_cursor, node_count, edge_count}` |
 | `read_nodes_since` | `(topic, cursor?)` | `[]{node_id, summary, seq}` |
 | `read_node` | `(topic, node_id)` | full node + all edges (in & out) |
-| `write_to_graph` | `(topic, nodes[], edges[])` | `{cursor}` |
+| `write` | `(topic, nodes[], edges[])` | `{cursor}` |
 
 `cursor` defaults to `0` — read from the beginning.
 
