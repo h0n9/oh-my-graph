@@ -54,6 +54,7 @@ func readNodesSinceHandler(mgr *graph.Manager) handlerFunc {
 		var p struct {
 			Topic  string `json:"topic"`
 			Cursor *int64 `json:"cursor"`
+			Limit  *int   `json:"limit"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil || p.Topic == "" {
 			return nil, &RPCError{Code: -32602, Message: "invalid params: topic required"}
@@ -64,12 +65,20 @@ func readNodesSinceHandler(mgr *graph.Manager) handlerFunc {
 			cursor = *p.Cursor
 		}
 
+		limit := 100
+		if p.Limit != nil {
+			if *p.Limit < 0 {
+				return nil, &RPCError{Code: -32602, Message: "invalid params: limit must be >= 0"}
+			}
+			limit = *p.Limit
+		}
+
 		g, err := mgr.Topic(p.Topic)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
 
-		summaries := g.NodesSince(cursor)
+		summaries := g.NodesSince(cursor, limit)
 		if summaries == nil {
 			summaries = []graph.NodeSummary{}
 		}

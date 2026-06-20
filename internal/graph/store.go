@@ -251,7 +251,7 @@ func (g *TopicGraph) appendToFile(records []WALRecord) error {
 	return w.Flush()
 }
 
-func (g *TopicGraph) NodesSince(cursor int64) []NodeSummary {
+func (g *TopicGraph) NodesSince(cursor int64, limit int) []NodeSummary {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -259,8 +259,12 @@ func (g *TopicGraph) NodesSince(cursor int64) []NodeSummary {
 		return g.nodeLog[i].seq > cursor
 	})
 
-	result := make([]NodeSummary, 0, len(g.nodeLog)-i)
-	for _, entry := range g.nodeLog[i:] {
+	slice := g.nodeLog[i:]
+	if limit > 0 && limit < len(slice) {
+		slice = slice[:limit]
+	}
+	result := make([]NodeSummary, 0, len(slice))
+	for _, entry := range slice {
 		n := g.nodes[entry.nodeID]
 		result = append(result, NodeSummary{
 			NodeID:  n.NodeID,
