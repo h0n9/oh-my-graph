@@ -25,6 +25,8 @@ make uninstall  # stop, remove binary and plist
 
 The server runs on port **7780** by default. Point your MCP client at `http://localhost:7780/mcp`.
 
+→ [Configure Claude Desktop](#claude-desktop)
+
 ## Overview
 
 `oh-my-graph` runs as an HTTP server that exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) interface. Multiple AI agents connect to a single server instance and share knowledge organized into **topics**.
