@@ -154,6 +154,34 @@ The server loads each topic graph into memory on first access and flushes writes
 
 Point your MCP client at `http://localhost:8080/mcp` (Streamable HTTP transport, JSON-RPC 2.0).
 
+### Claude Desktop
+
+Claude Desktop only supports stdio-based MCP servers. Use [`mcp-remote`](https://github.com/geelen/mcp-remote) as a bridge to the HTTP server.
+
+Add the following to your Claude Desktop config file:
+
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "oh-my-graph": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:7780/mcp"
+      ]
+    }
+  }
+}
+```
+
+> The port above (`7780`) matches the default used by the launchd service installed via `make install`. If you started the server manually with a different port, update the URL accordingly.
+
+Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `write`) will appear automatically in your Claude sessions.
+
 ## Build
 
 ```bash
