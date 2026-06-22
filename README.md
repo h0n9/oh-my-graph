@@ -205,4 +205,4 @@ Requires Go 1.26+. No external dependencies.
 
 ## License
 
-MIT
+Apache 2.0 — see [LICENSE](LICENSE) for details.
