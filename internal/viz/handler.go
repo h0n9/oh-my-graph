@@ -63,10 +63,11 @@ type graphData struct {
 }
 
 type nodeView struct {
-	ID         string  `json:"id"`
-	Type       string  `json:"type"`
-	Summary    string  `json:"summary"`
-	Confidence float64 `json:"confidence"`
+	ID          string  `json:"id"`
+	Type        string  `json:"type"`
+	Summary     string  `json:"summary"`
+	Description string  `json:"description"`
+	Confidence  float64 `json:"confidence"`
 }
 
 type edgeView struct {
@@ -97,10 +98,11 @@ func (h *Handler) serveGraphData(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, n := range nodes {
 		data.Nodes = append(data.Nodes, nodeView{
-			ID:         n.NodeID,
-			Type:       string(n.Type),
-			Summary:    n.Summary,
-			Confidence: n.Confidence,
+			ID:          n.NodeID,
+			Type:        string(n.Type),
+			Summary:     n.Summary,
+			Description: n.Description,
+			Confidence:  n.Confidence,
 		})
 	}
 	for _, e := range edges {

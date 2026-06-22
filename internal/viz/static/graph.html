@@ -17,6 +17,8 @@
     --border:      #dddddd;
     --muted:       #999999;
     --link:        #000000;
+    --panel-bg:    #fafafa;
+    --dim:         0.15;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -31,6 +33,8 @@
       --border:      #333333;
       --muted:       #666666;
       --link:        #eeeeee;
+      --panel-bg:    #1a1a1a;
+      --dim:         0.12;
     }
   }
 
@@ -54,6 +58,7 @@
     padding: 12px 20px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    z-index: 5;
   }
 
   header a {
@@ -62,34 +67,33 @@
     font-size: 12px;
   }
   header a:hover { color: var(--fg); }
-
   header .sep { color: var(--muted); }
+  header .topic { font-weight: 600; font-size: 14px; }
+  header .stats { margin-left: auto; color: var(--muted); font-size: 12px; }
 
-  header .topic {
-    font-weight: 600;
-    font-size: 14px;
-  }
-
-  header .stats {
-    margin-left: auto;
-    color: var(--muted);
-    font-size: 12px;
+  .main {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    display: flex;
   }
 
   #canvas {
     flex: 1;
-    width: 100%;
     cursor: grab;
   }
   #canvas.dragging { cursor: grabbing; }
 
+  /* ── node styles ── */
   .node-circle {
     fill: var(--node-fill);
     stroke: var(--node-stroke);
     stroke-width: 1.5;
+    transition: opacity 0.15s;
   }
   .node-circle.blocker  { stroke-dasharray: 4 2; }
   .node-circle.question { stroke-dasharray: 2 2; }
+  .node-circle.focused  { stroke-width: 3; }
 
   .node-label {
     fill: var(--label-color);
@@ -98,6 +102,7 @@
     text-anchor: middle;
     pointer-events: none;
     dominant-baseline: hanging;
+    transition: opacity 0.15s;
   }
   .node-type {
     fill: var(--type-color);
@@ -106,13 +111,17 @@
     text-anchor: middle;
     pointer-events: none;
     dominant-baseline: hanging;
+    transition: opacity 0.15s;
   }
 
+  /* ── edge styles ── */
   .edge-line {
     stroke: var(--edge-stroke);
     stroke-width: 1;
     fill: none;
+    transition: opacity 0.15s;
   }
+  .edge-line.highlighted { stroke-width: 2; }
 
   .edge-label {
     fill: var(--edge-label);
@@ -121,21 +130,111 @@
     text-anchor: middle;
     dominant-baseline: middle;
     pointer-events: none;
+    transition: opacity 0.15s;
   }
 
-  #tooltip {
-    position: fixed;
-    background: var(--bg);
-    color: var(--fg);
-    border: 1px solid var(--border);
-    padding: 8px 12px;
-    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-    font-size: 11px;
-    max-width: 320px;
+  /* dim class applied to non-focused elements */
+  .dimmed { opacity: var(--dim) !important; }
+
+  /* ── detail panel ── */
+  #detail {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 300px;
+    background: var(--panel-bg);
+    border-left: 1px solid var(--border);
+    padding: 24px 20px;
+    overflow-y: auto;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    z-index: 4;
+  }
+  #detail.visible { transform: translateX(0); }
+
+  #detail .close {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 18px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 2px 4px;
+  }
+  #detail .close:hover { color: var(--fg); }
+
+  #detail .d-type {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+
+  #detail .d-summary {
+    font-size: 13px;
+    font-weight: 600;
     line-height: 1.5;
-    pointer-events: none;
-    display: none;
-    z-index: 10;
+    margin-bottom: 16px;
+    word-break: break-word;
+  }
+
+  #detail .d-description {
+    font-size: 12px;
+    color: var(--fg);
+    line-height: 1.6;
+    margin-bottom: 16px;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+
+  #detail .d-section {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+    margin-top: 16px;
+  }
+
+  #detail .d-confidence {
+    font-size: 12px;
+    color: var(--fg);
+    margin-bottom: 12px;
+  }
+
+  #detail .d-id {
+    font-size: 10px;
+    color: var(--muted);
+    word-break: break-all;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  #detail .d-edge {
+    font-size: 11px;
+    color: var(--fg);
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+  }
+  #detail .d-edge:last-child { border-bottom: none; }
+  #detail .d-edge .etype {
+    color: var(--muted);
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+  #detail .d-edge .enode {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>
 </head>
@@ -148,20 +247,25 @@
   <span class="stats" id="statsLabel"></span>
 </header>
 
-<svg id="canvas">
-  <defs>
-    <marker id="arrow" markerWidth="6" markerHeight="6"
-            refX="6" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="var(--edge-stroke)"/>
-    </marker>
-  </defs>
-  <g id="root">
-    <g id="edgeLayer"></g>
-    <g id="nodeLayer"></g>
-  </g>
-</svg>
+<div class="main">
+  <svg id="canvas">
+    <defs>
+      <marker id="arrow" markerWidth="6" markerHeight="6"
+              refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L6,3 z" fill="var(--edge-stroke)"/>
+      </marker>
+    </defs>
+    <g id="root">
+      <g id="edgeLayer"></g>
+      <g id="nodeLayer"></g>
+    </g>
+  </svg>
 
-<div id="tooltip"></div>
+  <div id="detail">
+    <button class="close" id="detailClose">×</button>
+    <div id="detailContent"></div>
+  </div>
+</div>
 
 <script>
 const params = new URLSearchParams(location.search);
@@ -176,12 +280,13 @@ const REPULSION     = 6000;
 const SPRING_K      = 0.04;
 const SPRING_REST   = 160;
 const DAMPING       = 0.78;
-const ITERATIONS    = 1;   // physics steps per frame
-const MIN_ENERGY    = 0.3; // stop sim when avg velocity drops below this
+const ITERATIONS    = 1;
+const MIN_ENERGY    = 0.3;
 
 // ── state ────────────────────────────────────────────────────────────────────
 let nodes = [], edges = [];
 let sim = null;
+let focusedNodeId = null;
 
 // ── fetch & boot ─────────────────────────────────────────────────────────────
 fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
@@ -199,63 +304,48 @@ fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
     document.getElementById('statsLabel').textContent = 'error: ' + err;
   });
 
-// ── physics simulation ────────────────────────────────────────────────────────
+// ── physics ───────────────────────────────────────────────────────────────────
 function initSim() {
   const cx = window.innerWidth  / 2;
   const cy = window.innerHeight / 2;
   const spread = Math.max(180, Math.sqrt(nodes.length) * 80);
-
   nodes.forEach((n, i) => {
     const angle = (2 * Math.PI * i) / nodes.length;
-    n._x  = cx + spread * Math.cos(angle);
-    n._y  = cy + spread * Math.sin(angle);
-    n._vx = 0;
-    n._vy = 0;
+    n._x = cx + spread * Math.cos(angle);
+    n._y = cy + spread * Math.sin(angle);
+    n._vx = n._vy = 0;
   });
 }
 
 function physicsStep() {
   const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
-
-  // repulsion between all pairs
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const a = nodes[i], b = nodes[j];
-      const dx = b._x - a._x;
-      const dy = b._y - a._y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
-      const force = REPULSION / (dist * dist);
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
+      const dx = b._x - a._x, dy = b._y - a._y;
+      const dist = Math.sqrt(dx*dx + dy*dy) || 0.1;
+      const f = REPULSION / (dist * dist);
+      const fx = (dx/dist)*f, fy = (dy/dist)*f;
       a._vx -= fx; a._vy -= fy;
       b._vx += fx; b._vy += fy;
     }
   }
-
-  // spring attraction along edges
   edges.forEach(e => {
     const a = nodeMap[e.from], b = nodeMap[e.to];
     if (!a || !b) return;
-    const dx   = b._x - a._x;
-    const dy   = b._y - a._y;
-    const dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
-    const force = SPRING_K * (dist - SPRING_REST);
-    const fx = (dx / dist) * force;
-    const fy = (dy / dist) * force;
+    const dx = b._x - a._x, dy = b._y - a._y;
+    const dist = Math.sqrt(dx*dx + dy*dy) || 0.1;
+    const f = SPRING_K * (dist - SPRING_REST);
+    const fx = (dx/dist)*f, fy = (dy/dist)*f;
     a._vx += fx; a._vy += fy;
     b._vx -= fx; b._vy -= fy;
   });
-
-  // integrate
   let totalV = 0;
   nodes.forEach(n => {
-    n._vx *= DAMPING;
-    n._vy *= DAMPING;
-    n._x  += n._vx;
-    n._y  += n._vy;
+    n._vx *= DAMPING; n._vy *= DAMPING;
+    n._x  += n._vx;  n._y  += n._vy;
     totalV += Math.abs(n._vx) + Math.abs(n._vy);
   });
-
   return nodes.length ? totalV / nodes.length : 0;
 }
 
@@ -278,34 +368,40 @@ function truncate(s) {
 
 const edgeLayer = document.getElementById('edgeLayer');
 const nodeLayer = document.getElementById('nodeLayer');
-const tooltip   = document.getElementById('tooltip');
+const detail    = document.getElementById('detail');
+const detailContent = document.getElementById('detailContent');
 
 const edgeEls = {};
 const nodeEls = {};
+
+// adjacency for focus highlighting
+const adjEdges = {}; // nodeId -> [edgeId, ...]
 
 function render() {
   const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
 
   edges.forEach(e => {
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    [e.from, e.to].forEach(id => {
+      if (!adjEdges[id]) adjEdges[id] = [];
+      adjEdges[id].push(e.id);
+    });
 
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.classList.add('edge-line');
     line.setAttribute('marker-end', 'url(#arrow)');
-
     const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     label.classList.add('edge-label');
-    label.textContent = e.type.replace('_', ' ');
-
+    label.textContent = e.type.replace(/_/g, ' ');
     g.appendChild(line);
     g.appendChild(label);
     edgeLayer.appendChild(g);
-    edgeEls[e.id] = { g, line, label };
+    edgeEls[e.id] = { g, line, label, edge: e };
   });
 
   nodes.forEach(n => {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.style.cursor = 'default';
+    g.style.cursor = 'pointer';
 
     const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     circle.classList.add('node-circle', n.type);
@@ -325,26 +421,21 @@ function render() {
     nodeLayer.appendChild(g);
     nodeEls[n.id] = { g, circle, labelEl, typeEl };
 
-    // tooltip
-    g.addEventListener('mouseenter', ev => {
-      tooltip.style.display = 'block';
-      tooltip.innerHTML = `<strong>${n.type}</strong><br>${n.summary}` +
-        (n.confidence ? `<br><span style="color:var(--muted)">confidence: ${n.confidence}</span>` : '');
+    g.addEventListener('mouseenter', () => focusNode(n.id));
+    g.addEventListener('mouseleave', () => {
+      // only clear focus if panel is not open for this node
+      if (focusedNodeId !== n.id) clearFocus();
     });
-    g.addEventListener('mousemove', ev => {
-      tooltip.style.left = (ev.clientX + 14) + 'px';
-      tooltip.style.top  = (ev.clientY + 14) + 'px';
+    g.addEventListener('click', ev => {
+      ev.stopPropagation();
+      openDetail(n);
     });
-    g.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
 
-    // drag individual node
-    let draggingNode = false;
+    // drag
     g.addEventListener('mousedown', ev => {
       if (ev.button !== 0) return;
       ev.stopPropagation();
-      draggingNode = true;
       n._vx = n._vy = 0;
-      const svg = document.getElementById('canvas');
       const onMove = ev2 => {
         const pt = svgPoint(ev2.clientX, ev2.clientY);
         n._x = pt.x; n._y = pt.y;
@@ -353,7 +444,6 @@ function render() {
         if (!sim) startSim();
       };
       const onUp = () => {
-        draggingNode = false;
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
       };
@@ -363,7 +453,112 @@ function render() {
   });
 }
 
-// ── position update (called every frame) ────────────────────────────────────
+// ── focus / highlight ─────────────────────────────────────────────────────────
+function focusNode(nodeId) {
+  if (focusedNodeId === nodeId) return;
+  focusedNodeId = nodeId;
+
+  const connectedEdges = new Set(adjEdges[nodeId] || []);
+  const connectedNodes = new Set([nodeId]);
+  connectedEdges.forEach(eid => {
+    const e = edgeEls[eid]?.edge;
+    if (e) { connectedNodes.add(e.from); connectedNodes.add(e.to); }
+  });
+
+  Object.entries(nodeEls).forEach(([id, el]) => {
+    const dim = !connectedNodes.has(id);
+    el.circle.classList.toggle('dimmed', dim);
+    el.labelEl.classList.toggle('dimmed', dim);
+    el.typeEl.classList.toggle('dimmed', dim);
+    el.circle.classList.toggle('focused', id === nodeId);
+  });
+
+  Object.entries(edgeEls).forEach(([id, el]) => {
+    const active = connectedEdges.has(id);
+    el.line.classList.toggle('dimmed', !active);
+    el.label.classList.toggle('dimmed', !active);
+    el.line.classList.toggle('highlighted', active);
+  });
+}
+
+function clearFocus() {
+  if (focusedNodeId === null) return;
+  focusedNodeId = null;
+
+  Object.values(nodeEls).forEach(el => {
+    el.circle.classList.remove('dimmed', 'focused');
+    el.labelEl.classList.remove('dimmed');
+    el.typeEl.classList.remove('dimmed');
+  });
+  Object.values(edgeEls).forEach(el => {
+    el.line.classList.remove('dimmed', 'highlighted');
+    el.label.classList.remove('dimmed');
+  });
+}
+
+// ── detail panel ──────────────────────────────────────────────────────────────
+function openDetail(n) {
+  focusNode(n.id);
+
+  const nodeMap = Object.fromEntries(nodes.map(x => [x.id, x]));
+  const myEdges = (adjEdges[n.id] || []).map(eid => edgeEls[eid]?.edge).filter(Boolean);
+
+  const outgoing = myEdges.filter(e => e.from === n.id);
+  const incoming = myEdges.filter(e => e.to   === n.id);
+
+  function edgeRow(e, dir) {
+    const otherId = dir === 'out' ? e.to : e.from;
+    const other   = nodeMap[otherId];
+    const arrow   = dir === 'out' ? '→' : '←';
+    return `<div class="d-edge">
+      <span class="etype">${arrow} ${e.type.replace(/_/g,' ')}</span>
+      <span class="enode">${other ? truncate(other.summary) : otherId}</span>
+    </div>`;
+  }
+
+  let html = `
+    <div class="d-type">${n.type}</div>
+    <div class="d-summary">${escHtml(n.summary)}</div>
+  `;
+
+  if (n.description) {
+    html += `<div class="d-description">${escHtml(n.description)}</div>`;
+  }
+
+  if (n.confidence) {
+    html += `<div class="d-section">Confidence</div>
+             <div class="d-confidence">${n.confidence}</div>`;
+  }
+
+  if (outgoing.length) {
+    html += `<div class="d-section">Outgoing (${outgoing.length})</div>`;
+    html += outgoing.map(e => edgeRow(e, 'out')).join('');
+  }
+
+  if (incoming.length) {
+    html += `<div class="d-section">Incoming (${incoming.length})</div>`;
+    html += incoming.map(e => edgeRow(e, 'in')).join('');
+  }
+
+  html += `<div class="d-id">${escHtml(n.id)}</div>`;
+
+  detailContent.innerHTML = html;
+  detail.classList.add('visible');
+}
+
+function closeDetail() {
+  detail.classList.remove('visible');
+  clearFocus();
+}
+
+document.getElementById('detailClose').addEventListener('click', closeDetail);
+document.getElementById('canvas').addEventListener('click', closeDetail);
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── position update ───────────────────────────────────────────────────────────
 function updatePositions() {
   const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
 
@@ -372,23 +567,15 @@ function updatePositions() {
     if (!el) return;
     const a = nodeMap[e.from], b = nodeMap[e.to];
     if (!a || !b) return;
-
-    // shorten line so arrowhead sits on circle edge
-    const dx   = b._x - a._x;
-    const dy   = b._y - a._y;
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    const offset = NODE_R + 6; // 6px gap for arrowhead
-    const x1 = a._x + (dx / dist) * NODE_R;
-    const y1 = a._y + (dy / dist) * NODE_R;
-    const x2 = b._x - (dx / dist) * offset;
-    const y2 = b._y - (dy / dist) * offset;
-
-    el.line.setAttribute('x1', x1);
-    el.line.setAttribute('y1', y1);
-    el.line.setAttribute('x2', x2);
-    el.line.setAttribute('y2', y2);
-    el.label.setAttribute('x', (x1 + x2) / 2);
-    el.label.setAttribute('y', (y1 + y2) / 2 - 6);
+    const dx = b._x - a._x, dy = b._y - a._y;
+    const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+    const offset = NODE_R + 6;
+    const x1 = a._x + (dx/dist)*NODE_R,  y1 = a._y + (dy/dist)*NODE_R;
+    const x2 = b._x - (dx/dist)*offset,  y2 = b._y - (dy/dist)*offset;
+    el.line.setAttribute('x1', x1); el.line.setAttribute('y1', y1);
+    el.line.setAttribute('x2', x2); el.line.setAttribute('y2', y2);
+    el.label.setAttribute('x', (x1+x2)/2);
+    el.label.setAttribute('y', (y1+y2)/2 - 6);
   });
 
   nodes.forEach(n => {
@@ -412,16 +599,13 @@ function applyView() {
 }
 
 const canvas = document.getElementById('canvas');
-
 let isPanning = false, panStartX, panStartY, panStartVX, panStartVY;
 
 canvas.addEventListener('mousedown', ev => {
   if (ev.button !== 0) return;
   isPanning = true;
-  panStartX  = ev.clientX;
-  panStartY  = ev.clientY;
-  panStartVX = viewX;
-  panStartVY = viewY;
+  panStartX = ev.clientX; panStartY = ev.clientY;
+  panStartVX = viewX;     panStartVY = viewY;
   canvas.classList.add('dragging');
 });
 
@@ -441,20 +625,15 @@ canvas.addEventListener('wheel', ev => {
   ev.preventDefault();
   const factor = ev.deltaY < 0 ? 1.1 : 0.91;
   const rect   = canvas.getBoundingClientRect();
-  const mx     = ev.clientX - rect.left;
-  const my     = ev.clientY - rect.top;
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
   viewX = mx - factor * (mx - viewX);
   viewY = my - factor * (my - viewY);
   viewScale *= factor;
   applyView();
 }, { passive: false });
 
-// ── SVG coordinate helper ────────────────────────────────────────────────────
 function svgPoint(cx, cy) {
-  return {
-    x: (cx - viewX) / viewScale,
-    y: (cy - viewY) / viewScale,
-  };
+  return { x: (cx - viewX) / viewScale, y: (cy - viewY) / viewScale };
 }
 </script>
 </body>
