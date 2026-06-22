@@ -287,7 +287,8 @@ const MIN_ENERGY    = 0.3;
 // ── state ────────────────────────────────────────────────────────────────────
 let nodes = [], edges = [];
 let sim = null;
-let focusedNodeId = null;
+let focusedNodeId  = null;
+let hoveredNodeId  = null; // tracks mouse position regardless of panel state
 
 // ── fetch & boot ─────────────────────────────────────────────────────────────
 fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
@@ -422,10 +423,13 @@ function render() {
     nodeLayer.appendChild(g);
     nodeEls[n.id] = { g, circle, labelEl, typeEl };
 
-    g.addEventListener('mouseenter', () => focusNode(n.id));
+    g.addEventListener('mouseenter', () => {
+      hoveredNodeId = n.id;
+      if (!detail.classList.contains('visible')) focusNode(n.id);
+    });
     g.addEventListener('mouseleave', () => {
-      // only clear focus if panel is not open for this node
-      if (focusedNodeId !== n.id) clearFocus();
+      hoveredNodeId = null;
+      if (focusedNodeId === n.id && !detail.classList.contains('visible')) clearFocus();
     });
     g.addEventListener('click', ev => {
       ev.stopPropagation();
@@ -558,7 +562,8 @@ function openDetail(n) {
 
 function closeDetail() {
   detail.classList.remove('visible');
-  clearFocus();
+  if (hoveredNodeId) focusNode(hoveredNodeId);
+  else clearFocus();
 }
 
 document.getElementById('detailClose').addEventListener('click', closeDetail);
