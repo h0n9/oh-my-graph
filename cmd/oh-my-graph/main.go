@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	port := flag.Int("port", 8080, "HTTP listen port")
+	port := flag.Int("port", 7780, "HTTP listen port")
 	data := flag.String("data", "", "data directory (default: ~/.oh-my-graph)")
 	flag.Parse()
 

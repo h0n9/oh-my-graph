@@ -156,14 +156,14 @@ No extra infrastructure needed — the graph is the message bus.
 ### Start the server
 
 ```bash
-oh-my-graph --port 8080
+oh-my-graph --port 7780
 ```
 
 The server loads each topic graph into memory on first access and flushes writes to disk asynchronously. Multiple agents may connect concurrently.
 
 ### Connect via MCP
 
-Point your MCP client at `http://localhost:8080/mcp` (Streamable HTTP transport, JSON-RPC 2.0).
+Point your MCP client at `http://localhost:7780/mcp` (Streamable HTTP transport, JSON-RPC 2.0).
 
 ### Claude Desktop
 
