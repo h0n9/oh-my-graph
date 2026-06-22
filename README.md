@@ -2,6 +2,8 @@
 
 A knowledge graph MCP server for AI agents. Store, share, and traverse structured knowledge across sessions and agents using a simple append-only WAL.
 
+![oh-my-graph visualization](assets/screenshot.png)
+
 ## Quickstart
 
 **macOS** — installs as a launchd service that starts automatically on login:
@@ -42,6 +44,13 @@ Knowledge is stored as a graph of **nodes** (facts, concepts, questions, decisio
 └── comms/
     └── graph.jsonl
 ```
+
+## Graph Visualization
+
+Open **`http://localhost:7780/`** in your browser to explore the graph visually.
+
+- **Topic list** — `GET /` lists all topics with node and edge counts
+- **Force-directed graph** — `GET /graph?topic=<name>` renders a live interactive graph
 
 ## Why
 
