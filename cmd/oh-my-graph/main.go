@@ -14,6 +14,7 @@ import (
 
 	"github.com/h0n9/oh-my-graph/internal/graph"
 	"github.com/h0n9/oh-my-graph/internal/mcp"
+	"github.com/h0n9/oh-my-graph/internal/viz"
 )
 
 func main() {
@@ -23,11 +24,14 @@ func main() {
 
 	dir := resolveDir(*data)
 	mgr := graph.NewManager(dir)
-	srv := mcp.NewServer(mgr)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcp.NewServer(mgr))
+	mux.Handle("/", viz.NewHandler(mgr))
 
 	httpSrv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: srv,
+		Handler: mux,
 	}
 
 	go func() {

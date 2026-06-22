@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>oh-my-graph</title>
+<style>
+  :root {
+    --bg:      #ffffff;
+    --fg:      #000000;
+    --muted:   #666666;
+    --border:  #dddddd;
+    --hover:   #f5f5f5;
+    --link:    #000000;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:     #111111;
+      --fg:     #eeeeee;
+      --muted:  #999999;
+      --border: #333333;
+      --hover:  #1e1e1e;
+      --link:   #eeeeee;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 14px;
+    padding: 48px 32px;
+  }
+
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    margin-bottom: 32px;
+  }
+
+  .empty {
+    color: var(--muted);
+  }
+
+  ul {
+    list-style: none;
+    border-top: 1px solid var(--border);
+  }
+
+  li a {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    padding: 14px 8px;
+    border-bottom: 1px solid var(--border);
+    text-decoration: none;
+    color: var(--link);
+    transition: background 0.1s;
+  }
+
+  li a:hover {
+    background: var(--hover);
+  }
+
+  .topic-name {
+    font-weight: 600;
+    flex: 1;
+  }
+
+  .stats {
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<h1>oh-my-graph</h1>
+{{if .}}
+<ul>
+  {{range .}}
+  <li>
+    <a href="/graph?topic={{.Name}}">
+      <span class="topic-name">{{.Name}}</span>
+      <span class="stats">{{.NodeCount}} nodes · {{.EdgeCount}} edges</span>
+    </a>
+  </li>
+  {{end}}
+</ul>
+{{else}}
+<p class="empty">No topics yet.</p>
+{{end}}
+</body>
+</html>

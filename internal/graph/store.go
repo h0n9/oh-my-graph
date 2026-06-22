@@ -297,6 +297,23 @@ func (g *TopicGraph) Stats() (headSeq int64, nodeCount, edgeCount int) {
 	return g.headSeq, len(g.nodes), len(g.edges)
 }
 
+func (g *TopicGraph) Snapshot() ([]*Node, []*Edge) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	nodes := make([]*Node, 0, len(g.nodes))
+	for _, n := range g.nodes {
+		nodes = append(nodes, n)
+	}
+
+	edges := make([]*Edge, 0, len(g.edges))
+	for _, e := range g.edges {
+		edges = append(edges, e)
+	}
+
+	return nodes, edges
+}
+
 func (g *TopicGraph) Close() {
 	g.wg.Wait()
 }

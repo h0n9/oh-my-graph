@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>oh-my-graph</title>
+<style>
+  :root {
+    --bg:          #ffffff;
+    --fg:          #000000;
+    --node-fill:   #ffffff;
+    --node-stroke: #000000;
+    --edge-stroke: #555555;
+    --label-color: #000000;
+    --type-color:  #666666;
+    --edge-label:  #888888;
+    --border:      #dddddd;
+    --muted:       #999999;
+    --link:        #000000;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:          #111111;
+      --fg:          #eeeeee;
+      --node-fill:   #1e1e1e;
+      --node-stroke: #cccccc;
+      --edge-stroke: #777777;
+      --label-color: #eeeeee;
+      --type-color:  #aaaaaa;
+      --edge-label:  #777777;
+      --border:      #333333;
+      --muted:       #666666;
+      --link:        #eeeeee;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 13px;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  header a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 12px;
+  }
+  header a:hover { color: var(--fg); }
+
+  header .sep { color: var(--muted); }
+
+  header .topic {
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  header .stats {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  #canvas {
+    flex: 1;
+    width: 100%;
+    cursor: grab;
+  }
+  #canvas.dragging { cursor: grabbing; }
+
+  .node-circle {
+    fill: var(--node-fill);
+    stroke: var(--node-stroke);
+    stroke-width: 1.5;
+  }
+  .node-circle.blocker  { stroke-dasharray: 4 2; }
+  .node-circle.question { stroke-dasharray: 2 2; }
+
+  .node-label {
+    fill: var(--label-color);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 11px;
+    text-anchor: middle;
+    pointer-events: none;
+    dominant-baseline: hanging;
+  }
+  .node-type {
+    fill: var(--type-color);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 9px;
+    text-anchor: middle;
+    pointer-events: none;
+    dominant-baseline: hanging;
+  }
+
+  .edge-line {
+    stroke: var(--edge-stroke);
+    stroke-width: 1;
+    fill: none;
+  }
+
+  .edge-label {
+    fill: var(--edge-label);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 9px;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+  }
+
+  #tooltip {
+    position: fixed;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 11px;
+    max-width: 320px;
+    line-height: 1.5;
+    pointer-events: none;
+    display: none;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="/">oh-my-graph</a>
+  <span class="sep">/</span>
+  <span class="topic" id="topicName"></span>
+  <span class="stats" id="statsLabel"></span>
+</header>
+
+<svg id="canvas">
+  <defs>
+    <marker id="arrow" markerWidth="6" markerHeight="6"
+            refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L6,3 z" fill="var(--edge-stroke)"/>
+    </marker>
+  </defs>
+  <g id="root">
+    <g id="edgeLayer"></g>
+    <g id="nodeLayer"></g>
+  </g>
+</svg>
+
+<div id="tooltip"></div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const topic  = params.get('topic') || '';
+document.title = topic ? `${topic} — oh-my-graph` : 'oh-my-graph';
+document.getElementById('topicName').textContent = topic;
+
+// ── constants ────────────────────────────────────────────────────────────────
+const NODE_R        = 22;
+const LABEL_CHARS   = 28;
+const REPULSION     = 6000;
+const SPRING_K      = 0.04;
+const SPRING_REST   = 160;
+const DAMPING       = 0.78;
+const ITERATIONS    = 1;   // physics steps per frame
+const MIN_ENERGY    = 0.3; // stop sim when avg velocity drops below this
+
+// ── state ────────────────────────────────────────────────────────────────────
+let nodes = [], edges = [];
+let sim = null;
+
+// ── fetch & boot ─────────────────────────────────────────────────────────────
+fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
+  .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+  .then(data => {
+    nodes = data.nodes || [];
+    edges = data.edges || [];
+    document.getElementById('statsLabel').textContent =
+      `${nodes.length} nodes · ${edges.length} edges`;
+    initSim();
+    render();
+    startSim();
+  })
+  .catch(err => {
+    document.getElementById('statsLabel').textContent = 'error: ' + err;
+  });
+
+// ── physics simulation ────────────────────────────────────────────────────────
+function initSim() {
+  const cx = window.innerWidth  / 2;
+  const cy = window.innerHeight / 2;
+  const spread = Math.max(180, Math.sqrt(nodes.length) * 80);
+
+  nodes.forEach((n, i) => {
+    const angle = (2 * Math.PI * i) / nodes.length;
+    n._x  = cx + spread * Math.cos(angle);
+    n._y  = cy + spread * Math.sin(angle);
+    n._vx = 0;
+    n._vy = 0;
+  });
+}
+
+function physicsStep() {
+  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+  // repulsion between all pairs
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      const dx = b._x - a._x;
+      const dy = b._y - a._y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+      const force = REPULSION / (dist * dist);
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      a._vx -= fx; a._vy -= fy;
+      b._vx += fx; b._vy += fy;
+    }
+  }
+
+  // spring attraction along edges
+  edges.forEach(e => {
+    const a = nodeMap[e.from], b = nodeMap[e.to];
+    if (!a || !b) return;
+    const dx   = b._x - a._x;
+    const dy   = b._y - a._y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+    const force = SPRING_K * (dist - SPRING_REST);
+    const fx = (dx / dist) * force;
+    const fy = (dy / dist) * force;
+    a._vx += fx; a._vy += fy;
+    b._vx -= fx; b._vy -= fy;
+  });
+
+  // integrate
+  let totalV = 0;
+  nodes.forEach(n => {
+    n._vx *= DAMPING;
+    n._vy *= DAMPING;
+    n._x  += n._vx;
+    n._y  += n._vy;
+    totalV += Math.abs(n._vx) + Math.abs(n._vy);
+  });
+
+  return nodes.length ? totalV / nodes.length : 0;
+}
+
+function startSim() {
+  if (sim) cancelAnimationFrame(sim);
+  function tick() {
+    let avgV = 0;
+    for (let i = 0; i < ITERATIONS; i++) avgV = physicsStep();
+    updatePositions();
+    if (avgV > MIN_ENERGY) sim = requestAnimationFrame(tick);
+    else sim = null;
+  }
+  sim = requestAnimationFrame(tick);
+}
+
+// ── render (DOM creation, one-time) ──────────────────────────────────────────
+function truncate(s) {
+  return s.length > LABEL_CHARS ? s.slice(0, LABEL_CHARS - 1) + '…' : s;
+}
+
+const edgeLayer = document.getElementById('edgeLayer');
+const nodeLayer = document.getElementById('nodeLayer');
+const tooltip   = document.getElementById('tooltip');
+
+const edgeEls = {};
+const nodeEls = {};
+
+function render() {
+  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+  edges.forEach(e => {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.classList.add('edge-line');
+    line.setAttribute('marker-end', 'url(#arrow)');
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.classList.add('edge-label');
+    label.textContent = e.type.replace('_', ' ');
+
+    g.appendChild(line);
+    g.appendChild(label);
+    edgeLayer.appendChild(g);
+    edgeEls[e.id] = { g, line, label };
+  });
+
+  nodes.forEach(n => {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.style.cursor = 'default';
+
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.classList.add('node-circle', n.type);
+    circle.setAttribute('r', NODE_R);
+
+    const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    labelEl.classList.add('node-label');
+    labelEl.textContent = truncate(n.summary);
+
+    const typeEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    typeEl.classList.add('node-type');
+    typeEl.textContent = n.type;
+
+    g.appendChild(circle);
+    g.appendChild(labelEl);
+    g.appendChild(typeEl);
+    nodeLayer.appendChild(g);
+    nodeEls[n.id] = { g, circle, labelEl, typeEl };
+
+    // tooltip
+    g.addEventListener('mouseenter', ev => {
+      tooltip.style.display = 'block';
+      tooltip.innerHTML = `<strong>${n.type}</strong><br>${n.summary}` +
+        (n.confidence ? `<br><span style="color:var(--muted)">confidence: ${n.confidence}</span>` : '');
+    });
+    g.addEventListener('mousemove', ev => {
+      tooltip.style.left = (ev.clientX + 14) + 'px';
+      tooltip.style.top  = (ev.clientY + 14) + 'px';
+    });
+    g.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+    // drag individual node
+    let draggingNode = false;
+    g.addEventListener('mousedown', ev => {
+      if (ev.button !== 0) return;
+      ev.stopPropagation();
+      draggingNode = true;
+      n._vx = n._vy = 0;
+      const svg = document.getElementById('canvas');
+      const onMove = ev2 => {
+        const pt = svgPoint(ev2.clientX, ev2.clientY);
+        n._x = pt.x; n._y = pt.y;
+        n._vx = n._vy = 0;
+        updatePositions();
+        if (!sim) startSim();
+      };
+      const onUp = () => {
+        draggingNode = false;
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  });
+}
+
+// ── position update (called every frame) ────────────────────────────────────
+function updatePositions() {
+  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+  edges.forEach(e => {
+    const el = edgeEls[e.id];
+    if (!el) return;
+    const a = nodeMap[e.from], b = nodeMap[e.to];
+    if (!a || !b) return;
+
+    // shorten line so arrowhead sits on circle edge
+    const dx   = b._x - a._x;
+    const dy   = b._y - a._y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const offset = NODE_R + 6; // 6px gap for arrowhead
+    const x1 = a._x + (dx / dist) * NODE_R;
+    const y1 = a._y + (dy / dist) * NODE_R;
+    const x2 = b._x - (dx / dist) * offset;
+    const y2 = b._y - (dy / dist) * offset;
+
+    el.line.setAttribute('x1', x1);
+    el.line.setAttribute('y1', y1);
+    el.line.setAttribute('x2', x2);
+    el.line.setAttribute('y2', y2);
+    el.label.setAttribute('x', (x1 + x2) / 2);
+    el.label.setAttribute('y', (y1 + y2) / 2 - 6);
+  });
+
+  nodes.forEach(n => {
+    const el = nodeEls[n.id];
+    if (!el) return;
+    el.circle.setAttribute('cx', n._x);
+    el.circle.setAttribute('cy', n._y);
+    el.labelEl.setAttribute('x', n._x);
+    el.labelEl.setAttribute('y', n._y + NODE_R + 4);
+    el.typeEl.setAttribute('x', n._x);
+    el.typeEl.setAttribute('y', n._y + NODE_R + 16);
+  });
+}
+
+// ── pan & zoom ────────────────────────────────────────────────────────────────
+let viewX = 0, viewY = 0, viewScale = 1;
+const root = document.getElementById('root');
+
+function applyView() {
+  root.setAttribute('transform', `translate(${viewX},${viewY}) scale(${viewScale})`);
+}
+
+const canvas = document.getElementById('canvas');
+
+let isPanning = false, panStartX, panStartY, panStartVX, panStartVY;
+
+canvas.addEventListener('mousedown', ev => {
+  if (ev.button !== 0) return;
+  isPanning = true;
+  panStartX  = ev.clientX;
+  panStartY  = ev.clientY;
+  panStartVX = viewX;
+  panStartVY = viewY;
+  canvas.classList.add('dragging');
+});
+
+window.addEventListener('mousemove', ev => {
+  if (!isPanning) return;
+  viewX = panStartVX + (ev.clientX - panStartX);
+  viewY = panStartVY + (ev.clientY - panStartY);
+  applyView();
+});
+
+window.addEventListener('mouseup', () => {
+  isPanning = false;
+  canvas.classList.remove('dragging');
+});
+
+canvas.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const factor = ev.deltaY < 0 ? 1.1 : 0.91;
+  const rect   = canvas.getBoundingClientRect();
+  const mx     = ev.clientX - rect.left;
+  const my     = ev.clientY - rect.top;
+  viewX = mx - factor * (mx - viewX);
+  viewY = my - factor * (my - viewY);
+  viewScale *= factor;
+  applyView();
+}, { passive: false });
+
+// ── SVG coordinate helper ────────────────────────────────────────────────────
+function svgPoint(cx, cy) {
+  return {
+    x: (cx - viewX) / viewScale,
+    y: (cy - viewY) / viewScale,
+  };
+}
+</script>
+</body>
+</html>
