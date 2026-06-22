@@ -219,22 +219,23 @@
   #detail .d-edge {
     font-size: 11px;
     color: var(--fg);
-    padding: 4px 0;
+    padding: 6px 0;
     border-bottom: 1px solid var(--border);
     display: flex;
     gap: 6px;
     align-items: baseline;
+    cursor: pointer;
+    text-decoration: none;
   }
   #detail .d-edge:last-child { border-bottom: none; }
+  #detail .d-edge:hover .enode { text-decoration: underline; }
   #detail .d-edge .etype {
     color: var(--muted);
     font-size: 10px;
     flex-shrink: 0;
   }
   #detail .d-edge .enode {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    word-break: break-word;
   }
 </style>
 </head>
@@ -510,9 +511,10 @@ function openDetail(n) {
     const otherId = dir === 'out' ? e.to : e.from;
     const other   = nodeMap[otherId];
     const arrow   = dir === 'out' ? '→' : '←';
-    return `<div class="d-edge">
+    const label   = other ? escHtml(other.summary) : escHtml(otherId);
+    return `<div class="d-edge" data-node-id="${escHtml(otherId)}">
       <span class="etype">${arrow} ${e.type.replace(/_/g,' ')}</span>
-      <span class="enode">${other ? truncate(other.summary) : otherId}</span>
+      <span class="enode">${label}</span>
     </div>`;
   }
 
@@ -544,6 +546,14 @@ function openDetail(n) {
 
   detailContent.innerHTML = html;
   detail.classList.add('visible');
+
+  detailContent.querySelectorAll('.d-edge[data-node-id]').forEach(row => {
+    row.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const target = nodeMap[row.dataset.nodeId];
+      if (target) openDetail(target);
+    });
+  });
 }
 
 function closeDetail() {
