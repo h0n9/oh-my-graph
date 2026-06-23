@@ -9,20 +9,14 @@ A knowledge graph MCP server for AI agents. Store, share, and traverse structure
 **macOS** — installs as a launchd service that starts automatically on login:
 
 ```bash
-git clone https://github.com/h0n9/oh-my-graph
-cd oh-my-graph
-make install    # build, install to /usr/local/bin, register & start launchd service
+brew install h0n9/devops/oh-my-graph
+brew services start h0n9/devops/oh-my-graph
 ```
 
-Manage the service:
+**Linux** — download the pre-built binary and place it in your `PATH` (replace `{VERSION}` with the desired version and `{ARCH}` with the architecture):
 
 ```bash
-make start      # start the service
-make stop       # stop the service
-make restart    # restart the service
-make status     # show launchd service status
-make logs       # tail ~/Library/Logs/oh-my-graph.log
-make uninstall  # stop, remove binary and plist
+curl -sL https://github.com/h0n9/oh-my-graph/releases/download/v{VERSION}/oh-my-graph_linux_{ARCH}.tar.gz | tar xz -C /usr/local/bin
 ```
 
 The server runs on port **7780** by default. Point your MCP client at `http://localhost:7780/mcp`.
@@ -156,7 +150,9 @@ No extra infrastructure needed — the graph is the message bus.
 ### Start the server
 
 ```bash
-oh-my-graph --port 7780
+oh-my-graph                  # listens on :7780, data at ~/.oh-my-graph
+oh-my-graph --port 8080      # custom port
+oh-my-graph --data /var/omg  # custom data directory
 ```
 
 The server loads each topic graph into memory on first access and flushes writes to disk asynchronously. Multiple agents may connect concurrently.
@@ -189,16 +185,18 @@ Add the following to your Claude Desktop config file:
 }
 ```
 
-> The port above (`7780`) matches the default used by the launchd service installed via `make install`. If you started the server manually with a different port, update the URL accordingly.
+> The port above (`7780`) is the default. If you started the server with a different port, update the URL accordingly.
 
 Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `write`) will appear automatically in your Claude sessions.
 
-## Build
+## Development
 
 ```bash
 git clone https://github.com/h0n9/oh-my-graph
 cd oh-my-graph
-go build -o oh-my-graph .
+make run    # go run — starts the server on port 7780
+make build  # produces ./oh-my-graph binary
+make clean  # removes the binary
 ```
 
 Requires Go 1.26+. No external dependencies.
