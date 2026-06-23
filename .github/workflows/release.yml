@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        run: |
+          for GOOS in darwin linux; do
+            for GOARCH in amd64 arm64; do
+              GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" \
+                -o oh-my-graph ./cmd/oh-my-graph/
+              tar czf oh-my-graph_${GOOS}_${GOARCH}.tar.gz oh-my-graph
+              rm oh-my-graph
+            done
+          done
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --title "Release ${{ github.ref_name }}" \
+            --generate-notes \
+            oh-my-graph_darwin_amd64.tar.gz \
+            oh-my-graph_darwin_arm64.tar.gz \
+            oh-my-graph_linux_amd64.tar.gz \
+            oh-my-graph_linux_arm64.tar.gz
+
+      - name: Open Homebrew formula PR
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION_NUM="${VERSION#v}"
+          SHA_DARWIN_ARM64=$(shasum -a 256 oh-my-graph_darwin_arm64.tar.gz | cut -d' ' -f1)
+          SHA_DARWIN_AMD64=$(shasum -a 256 oh-my-graph_darwin_amd64.tar.gz | cut -d' ' -f1)
+
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/h0n9/homebrew-devops.git tap
+          cd tap
+          git checkout -b oh-my-graph-${VERSION}
+
+          sed -i \
+            -e "s/version \".*\"/version \"${VERSION_NUM}\"/" \
+            -e "s/sha256 \".*\" # darwin_arm64/sha256 \"${SHA_DARWIN_ARM64}\" # darwin_arm64/" \
+            -e "s/sha256 \".*\" # darwin_amd64/sha256 \"${SHA_DARWIN_AMD64}\" # darwin_amd64/" \
+            Formula/oh-my-graph.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: update oh-my-graph to ${VERSION}"
+          git push origin oh-my-graph-${VERSION}
+
+          GH_TOKEN=${HOMEBREW_TAP_TOKEN} gh pr create \
+            --repo h0n9/homebrew-devops \
+            --title "chore: update oh-my-graph to ${VERSION}" \
+            --body "Automated formula update for oh-my-graph ${VERSION}." \
+            --head oh-my-graph-${VERSION} \
+            --base main
