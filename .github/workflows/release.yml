@@ -48,6 +48,8 @@ jobs:
           VERSION_NUM="${VERSION#v}"
           SHA_DARWIN_ARM64=$(shasum -a 256 oh-my-graph_darwin_arm64.tar.gz | cut -d' ' -f1)
           SHA_DARWIN_AMD64=$(shasum -a 256 oh-my-graph_darwin_amd64.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_ARM64=$(shasum -a 256 oh-my-graph_linux_arm64.tar.gz | cut -d' ' -f1)
+          SHA_LINUX_AMD64=$(shasum -a 256 oh-my-graph_linux_amd64.tar.gz | cut -d' ' -f1)
 
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/h0n9/homebrew-devops.git tap
           cd tap
@@ -57,6 +59,8 @@ jobs:
             -e "s/version \".*\"/version \"${VERSION_NUM}\"/" \
             -e "s/sha256 \".*\" # darwin_arm64/sha256 \"${SHA_DARWIN_ARM64}\" # darwin_arm64/" \
             -e "s/sha256 \".*\" # darwin_amd64/sha256 \"${SHA_DARWIN_AMD64}\" # darwin_amd64/" \
+            -e "s/sha256 \".*\" # linux_arm64/sha256 \"${SHA_LINUX_ARM64}\" # linux_arm64/" \
+            -e "s/sha256 \".*\" # linux_amd64/sha256 \"${SHA_LINUX_AMD64}\" # linux_amd64/" \
             Formula/oh-my-graph.rb
 
           git config user.name "github-actions[bot]"
