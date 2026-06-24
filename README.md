@@ -23,9 +23,11 @@ curl -sL https://github.com/h0n9/oh-my-graph/releases/download/v{VERSION}/oh-my-
 
 The server runs on port **7780** by default. Point your MCP client at `http://localhost:7780/mcp`.
 
-→ [Configure Claude Desktop](#claude-desktop)
-→ [Configure Claude Code](#claude-code)
-→ [Configure Codex](#codex)
+Check the following sections for instructions on connecting MCP client to `oh-my-graph`:
+
+- [Claude Desktop](#claude-desktop)
+- [Claude Code](#claude-code)
+- [Codex](#codex)
 
 ## Overview
 
