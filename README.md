@@ -24,6 +24,8 @@ curl -sL https://github.com/h0n9/oh-my-graph/releases/download/v{VERSION}/oh-my-
 The server runs on port **7780** by default. Point your MCP client at `http://localhost:7780/mcp`.
 
 → [Configure Claude Desktop](#claude-desktop)
+→ [Configure Claude Code](#claude-code)
+→ [Configure Codex](#codex)
 
 ## Overview
 
@@ -190,6 +192,56 @@ Add the following to your Claude Desktop config file:
 > The port above (`7780`) is the default. If you started the server with a different port, update the URL accordingly.
 
 Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `write`) will appear automatically in your Claude sessions.
+
+### Claude Code
+
+Claude Code natively supports Streamable HTTP MCP — no bridge required.
+
+**Via CLI** (writes to `~/.claude.json` globally):
+
+```bash
+claude mcp add oh-my-graph --transport http http://localhost:7780/mcp
+```
+
+**Manually** — add to `~/.claude.json` (global) or `.claude/settings.json` (project):
+
+```json
+{
+  "mcpServers": {
+    "oh-my-graph": {
+      "type": "http",
+      "url": "http://localhost:7780/mcp"
+    }
+  }
+}
+```
+
+**Tip:** Add the following to your `~/.claude/CLAUDE.md` so Claude automatically loads graph context at the start of every session:
+
+````markdown
+## oh-my-graph Knowledge Graph
+
+At the start of every session, connect to the `oh-my-graph` MCP server:
+
+1. Call `list_topics` to discover existing topics.
+2. Infer the topic from context — working directory name, project name, or the user's first message.
+3. Call `read_nodes_since(<topic>)` (cursor 0) to load existing context before responding.
+
+During the session, call `write` frequently to persist findings, decisions, and artifacts. Link related nodes with edges to preserve reasoning chains.
+````
+
+### Codex
+
+Add to `~/.codex/config.yaml`:
+
+```yaml
+mcp_servers:
+  - name: oh-my-graph
+    type: http
+    url: http://localhost:7780/mcp
+```
+
+Codex will surface the `list_topics`, `get_topic`, `read_nodes_since`, `read_node`, and `write` tools in every session.
 
 ## Syncing across devices
 
