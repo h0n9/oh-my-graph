@@ -13,6 +13,8 @@ brew install h0n9/devops/oh-my-graph
 brew services start h0n9/devops/oh-my-graph
 ```
 
+If you'd like to share the graph across multiple Macs, refer to the [Syncing across devices](#syncing-across-devices) section.
+
 **Linux** — download the pre-built binary and place it in your `PATH` (replace `{VERSION}` with the desired version and `{ARCH}` with the architecture):
 
 ```bash
@@ -188,6 +190,36 @@ Add the following to your Claude Desktop config file:
 > The port above (`7780`) is the default. If you started the server with a different port, update the URL accordingly.
 
 Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `write`) will appear automatically in your Claude sessions.
+
+## Syncing across devices
+
+Symlinking the data directory into iCloud Drive lets you share your graph across multiple Macs and browse it on iPhone. The service reads and writes through the symlink transparently.
+
+**Fresh install (no existing data):**
+
+```bash
+mkdir -p "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph"
+ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph" ~/.oh-my-graph
+brew services start h0n9/devops/oh-my-graph
+```
+
+**Existing data at `~/.oh-my-graph`:**
+
+> **Back up your data before migrating.** `mv` is destructive — if something goes wrong mid-way, you could lose data.
+> ```bash
+> cp -r ~/.oh-my-graph ~/.oh-my-graph.bak
+> ```
+
+```bash
+brew services stop h0n9/devops/oh-my-graph
+mv ~/.oh-my-graph "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph"
+ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph" ~/.oh-my-graph
+brew services start h0n9/devops/oh-my-graph
+```
+
+On each additional Mac, run the fresh install commands — the symlink will point to the same iCloud directory already populated by the first machine.
+
+> Make sure only one machine runs the server at a time to avoid concurrent writes to the same file.
 
 ## Development
 
