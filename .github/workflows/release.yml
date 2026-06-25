@@ -21,7 +21,7 @@ jobs:
         run: |
           for GOOS in darwin linux; do
             for GOARCH in amd64 arm64; do
-              GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" \
+              GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
                 -o oh-my-graph ./cmd/oh-my-graph/
               tar czf oh-my-graph_${GOOS}_${GOARCH}.tar.gz oh-my-graph
               rm oh-my-graph

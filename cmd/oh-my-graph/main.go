@@ -17,7 +17,15 @@ import (
 	"github.com/h0n9/oh-my-graph/internal/viz"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=<tag>".
+var Version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println(Version)
+		os.Exit(0)
+	}
+
 	port := flag.Int("port", 7780, "HTTP listen port")
 	data := flag.String("data", "", "data directory (default: ~/.oh-my-graph)")
 	flag.Parse()
@@ -27,6 +35,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcp.NewServer(mgr))
+	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"version":%q}`, Version)
+	})
 	mux.Handle("/", viz.NewHandler(mgr))
 
 	httpSrv := &http.Server{
