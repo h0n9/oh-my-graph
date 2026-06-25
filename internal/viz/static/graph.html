@@ -81,6 +81,8 @@
   #canvas {
     flex: 1;
     cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
   }
   #canvas.dragging { cursor: grabbing; }
 
@@ -131,7 +133,9 @@
     dominant-baseline: middle;
     pointer-events: none;
     transition: opacity 0.15s;
+    opacity: 0;
   }
+  .edge-label.visible { opacity: 1; }
 
   /* dim class applied to non-focused elements */
   .dimmed { opacity: var(--dim) !important; }
@@ -328,8 +332,8 @@ function physicsStep() {
       const dist = Math.sqrt(dx*dx + dy*dy) || 0.1;
       const f = REPULSION / (dist * dist);
       const fx = (dx/dist)*f, fy = (dy/dist)*f;
-      a._vx -= fx; a._vy -= fy;
-      b._vx += fx; b._vy += fy;
+      if (!a._pinned) { a._vx -= fx; a._vy -= fy; }
+      if (!b._pinned) { b._vx += fx; b._vy += fy; }
     }
   }
   edges.forEach(e => {
@@ -339,11 +343,20 @@ function physicsStep() {
     const dist = Math.sqrt(dx*dx + dy*dy) || 0.1;
     const f = SPRING_K * (dist - SPRING_REST);
     const fx = (dx/dist)*f, fy = (dy/dist)*f;
-    a._vx += fx; a._vy += fy;
-    b._vx -= fx; b._vy -= fy;
+    if (!a._pinned) { a._vx += fx; a._vy += fy; }
+    if (!b._pinned) { b._vx -= fx; b._vy -= fy; }
+  });
+  // weak center gravity to prevent nodes drifting off-screen
+  const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+  nodes.forEach(n => {
+    if (!n._pinned) {
+      n._vx += (cx - n._x) * 0.005;
+      n._vy += (cy - n._y) * 0.005;
+    }
   });
   let totalV = 0;
   nodes.forEach(n => {
+    if (n._pinned) return;
     n._vx *= DAMPING; n._vy *= DAMPING;
     n._x  += n._vx;  n._y  += n._vy;
     totalV += Math.abs(n._vx) + Math.abs(n._vy);
@@ -440,15 +453,18 @@ function render() {
     g.addEventListener('mousedown', ev => {
       if (ev.button !== 0) return;
       ev.stopPropagation();
+      n._pinned = true;
       n._vx = n._vy = 0;
+      if (!sim) startSim();
       const onMove = ev2 => {
         const pt = svgPoint(ev2.clientX, ev2.clientY);
         n._x = pt.x; n._y = pt.y;
-        n._vx = n._vy = 0;
         updatePositions();
-        if (!sim) startSim();
       };
       const onUp = () => {
+        n._vx = n._vy = 0;
+        n._pinned = false;
+        if (!sim) startSim();
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
       };
@@ -483,6 +499,7 @@ function focusNode(nodeId) {
     el.line.classList.toggle('dimmed', !active);
     el.label.classList.toggle('dimmed', !active);
     el.line.classList.toggle('highlighted', active);
+    el.label.classList.toggle('visible', active);
   });
 }
 
@@ -497,7 +514,7 @@ function clearFocus() {
   });
   Object.values(edgeEls).forEach(el => {
     el.line.classList.remove('dimmed', 'highlighted');
-    el.label.classList.remove('dimmed');
+    el.label.classList.remove('dimmed', 'visible');
   });
 }
 
