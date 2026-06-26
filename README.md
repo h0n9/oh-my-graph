@@ -271,7 +271,14 @@ ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph" ~/.oh-my-
 brew services start h0n9/devops/oh-my-graph
 ```
 
-On each additional Mac, run the fresh install commands — the symlink will point to the same iCloud directory already populated by the first machine.
+On each additional Mac, run the following commands — the symlink will point to the same iCloud directory already populated by the first machine.
+
+```bash
+brew services stop h0n9/devops/oh-my-graph
+rm -rf ~/.oh-my-graph
+ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph" ~/.oh-my-graph
+brew services start h0n9/devops/oh-my-graph
+```
 
 > Make sure only one machine runs the server at a time to avoid concurrent writes to the same file.
 
