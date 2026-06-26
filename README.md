@@ -173,7 +173,7 @@ Claude Desktop only supports stdio-based MCP servers. Use [`mcp-remote`](https:/
 
 Add the following to your Claude Desktop config file:
 
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**macOS:** `~/Library/Application\ Support/Claude/claude_desktop_config.json`
 **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
