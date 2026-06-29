@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 var validNodeTypes = map[NodeType]bool{
@@ -54,6 +56,7 @@ type TopicGraph struct {
 	adjIn   map[string][]*Edge
 	nodeLog []nodeLogEntry
 	headSeq int64
+	watcher *fsnotify.Watcher
 }
 
 func newTopicGraph(path string) (*TopicGraph, error) {
@@ -66,6 +69,11 @@ func newTopicGraph(path string) (*TopicGraph, error) {
 	}
 	if err := g.load(); err != nil {
 		return nil, err
+	}
+	if err := g.startWatcher(); err != nil {
+		log.Printf("oh-my-graph: file watcher unavailable for %s: %v", path, err)
+	} else {
+		log.Printf("oh-my-graph: watching %s for external changes", path)
 	}
 	return g, nil
 }
@@ -314,6 +322,97 @@ func (g *TopicGraph) Snapshot() ([]*Node, []*Edge) {
 	return nodes, edges
 }
 
+func (g *TopicGraph) startWatcher() error {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	// Ensure the file exists before watching — fsnotify requires the path to exist.
+	if _, err := os.Stat(g.path); os.IsNotExist(err) {
+		if f, err := os.Create(g.path); err == nil {
+			f.Close()
+		}
+	}
+	if err := w.Add(g.path); err != nil {
+		w.Close()
+		return err
+	}
+	g.watcher = w
+	go func() {
+		for {
+			select {
+			case event, ok := <-w.Events:
+				if !ok {
+					return
+				}
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+					g.mu.Lock()
+					g.reloadNewLines()
+					g.mu.Unlock()
+				}
+			case _, ok := <-w.Errors:
+				if !ok {
+					return
+				}
+			}
+		}
+	}()
+	return nil
+}
+
+// reloadNewLines must be called under g.mu.Lock().
+func (g *TopicGraph) reloadNewLines() {
+	f, err := os.Open(g.path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var rec WALRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		if rec.Seq <= g.headSeq {
+			continue
+		}
+		switch rec.Type {
+		case "node":
+			n := new(Node)
+			if err := json.Unmarshal(rec.Data, n); err != nil {
+				continue
+			}
+			if _, exists := g.nodes[n.NodeID]; !exists {
+				g.nodes[n.NodeID] = n
+				g.nodeLog = append(g.nodeLog, nodeLogEntry{seq: rec.Seq, nodeID: n.NodeID})
+			}
+		case "edge":
+			e := new(Edge)
+			if err := json.Unmarshal(rec.Data, e); err != nil {
+				continue
+			}
+			if _, exists := g.edges[e.EdgeID]; !exists {
+				g.edges[e.EdgeID] = e
+				g.adjOut[e.FromNodeID] = append(g.adjOut[e.FromNodeID], e)
+				g.adjIn[e.ToNodeID] = append(g.adjIn[e.ToNodeID], e)
+			}
+		}
+		if rec.Seq > g.headSeq {
+			g.headSeq = rec.Seq
+		}
+	}
+	log.Printf("oh-my-graph: reloaded %s, head seq now %d", g.path, g.headSeq)
+}
+
 func (g *TopicGraph) Close() {
+	if g.watcher != nil {
+		g.watcher.Close()
+	}
 	g.wg.Wait()
 }
