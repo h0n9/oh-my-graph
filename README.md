@@ -199,11 +199,13 @@ Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`
 
 Claude Code natively supports Streamable HTTP MCP — no bridge required.
 
-**Via CLI** (writes to `~/.claude.json` globally):
+**Via CLI** (writes to `~/.claude.json` at user/global scope, so the server is available from every project):
 
 ```bash
-claude mcp add oh-my-graph --transport http http://localhost:7780/mcp
+claude mcp add oh-my-graph --transport http --scope user http://localhost:7780/mcp
 ```
+
+> Omitting `--scope user` defaults to **local** scope — the server is only visible from the directory you ran the command in. Since `oh-my-graph` runs as a permanent background service, global scope is almost always what you want.
 
 **Manually** — add to `~/.claude.json` (global) or `.claude/settings.json` (project):
 
