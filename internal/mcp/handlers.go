@@ -9,6 +9,8 @@ import (
 
 type handlerFunc func(params json.RawMessage) (any, *RPCError)
 
+const maxNodesSinceLimit = 1000
+
 func callToolResult(text string) *CallToolResult {
 	return &CallToolResult{Content: []Content{{Type: "text", Text: text}}}
 }
@@ -67,8 +69,8 @@ func readNodesSinceHandler(mgr *graph.Manager) handlerFunc {
 
 		limit := 100
 		if p.Limit != nil {
-			if *p.Limit < 0 {
-				return nil, &RPCError{Code: -32602, Message: "invalid params: limit must be >= 0"}
+			if *p.Limit <= 0 || *p.Limit > maxNodesSinceLimit {
+				return nil, &RPCError{Code: -32602, Message: "invalid params: limit must be between 1 and 1000"}
 			}
 			limit = *p.Limit
 		}

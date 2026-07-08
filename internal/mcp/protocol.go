@@ -81,7 +81,7 @@ const readNodesSinceSchema = `{
   "properties": {
     "topic":  { "type": "string", "description": "Topic name" },
     "cursor": { "type": "integer", "description": "Sequence number to read after (default: 0)", "default": 0 },
-    "limit":  { "type": "integer", "description": "Maximum number of nodes to return (default: 100; set 0 for unlimited)", "default": 100 }
+    "limit":  { "type": "integer", "description": "Maximum number of nodes to return (default: 100; must be between 1 and 1000)", "default": 100, "minimum": 1, "maximum": 1000 }
   },
   "required": ["topic"]
 }`
