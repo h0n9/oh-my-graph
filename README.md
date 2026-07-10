@@ -1,6 +1,10 @@
 # oh-my-graph
 
-A knowledge graph MCP server for AI agents. Store, share, and traverse structured knowledge across sessions and agents using a simple append-only WAL.
+**Continue the project, not the conversation.**
+
+Every AI session starts fresh. Your project never does.
+
+`oh-my-graph` is a shared, persistent knowledge graph for AI agents. Sessions are ephemeral; project understanding is permanent.
 
 ![oh-my-graph visualization](assets/screenshot.png)
 
@@ -54,12 +58,18 @@ Open **`http://localhost:7780/`** in your browser to explore the graph visually.
 
 ## Why
 
-AI sessions are ephemeral. Knowledge discovered in one session is lost by the next. `oh-my-graph` gives agents a shared, persistent, structured memory:
+AI sessions are ephemeral. Every new session — a new terminal, a new agent, a new person on the team — starts from zero, no matter how much the last one figured out.
+
+Dropbox stores your files. Git stores the *evolution* of your project. Chat history stores a conversation. `oh-my-graph` stores the evolution of your project's *understanding* — the findings, decisions, and open questions multiple agents accumulate while working on it, so the next session picks up where the last one left off instead of re-discovering it.
+
+Concretely, that means:
 
 - **Persist findings** across sessions
-- **Share knowledge** between concurrent agents
+- **Share knowledge** between concurrent agents working on the same project
 - **Pass messages** between sessions using `message` nodes and `replies_to` edges
 - **Track reasoning** with `supports`, `contradicts`, `causes`, `deprecates` edges
+
+Under the hood, this is a graph of nodes and edges, persisted as an append-only WAL — see [Overview](#overview).
 
 ## Data Model
 
