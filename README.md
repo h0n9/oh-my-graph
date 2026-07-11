@@ -4,9 +4,30 @@
 
 Every AI session starts fresh. Your project never does.
 
-`oh-my-graph` is a shared, persistent knowledge graph for AI agents. Sessions are ephemeral; project understanding is permanent.
+`oh-my-graph` gives AI agents persistent project understanding — implemented as a shared knowledge graph. Sessions are ephemeral; what agents learn about your project isn't.
 
 ![oh-my-graph visualization](assets/screenshot.png)
+
+## Why
+
+AI sessions are ephemeral. Every new session — a new terminal, a new agent, a new person on the team — starts from zero, no matter how much the last one figured out.
+
+Dropbox stores your files. Git stores the *evolution* of your project. Chat history stores a conversation. `oh-my-graph` stores the evolution of your project's *understanding* — the findings, decisions, and open questions multiple agents accumulate while working on it, so the next session picks up where the last one left off instead of re-discovering it.
+
+**In practice:**
+
+1. Session A (debugging a cache issue) discovers the root cause and writes a `finding` node: *"Redis cache hit rate dropped to 40% after v2.3 — key prefix change in config loader."*
+2. A week later, Session B (a different agent, or the same one in a fresh context) starts work on the same project. It calls `read_nodes_since` and immediately sees Session A's finding — no re-discovery, no re-explaining.
+3. Session B builds on it: writes a `decision` node fixing the prefix, linked back to the finding with a `resolves` edge.
+
+Concretely, that means:
+
+- **Persist findings** across sessions
+- **Share knowledge** between concurrent agents working on the same project
+- **Pass messages** between sessions using `message` nodes and `replies_to` edges
+- **Track reasoning** with `supports`, `contradicts`, `causes`, `deprecates` edges
+
+Under the hood, this is a graph of nodes and edges, persisted as an append-only WAL — see [Overview](#overview).
 
 ## Quickstart
 
@@ -55,21 +76,6 @@ Open **`http://localhost:7780/`** in your browser to explore the graph visually.
 
 - **Topic list** — `GET /` lists all topics with node and edge counts
 - **Force-directed graph** — `GET /graph?topic=<name>` renders a live interactive graph
-
-## Why
-
-AI sessions are ephemeral. Every new session — a new terminal, a new agent, a new person on the team — starts from zero, no matter how much the last one figured out.
-
-Dropbox stores your files. Git stores the *evolution* of your project. Chat history stores a conversation. `oh-my-graph` stores the evolution of your project's *understanding* — the findings, decisions, and open questions multiple agents accumulate while working on it, so the next session picks up where the last one left off instead of re-discovering it.
-
-Concretely, that means:
-
-- **Persist findings** across sessions
-- **Share knowledge** between concurrent agents working on the same project
-- **Pass messages** between sessions using `message` nodes and `replies_to` edges
-- **Track reasoning** with `supports`, `contradicts`, `causes`, `deprecates` edges
-
-Under the hood, this is a graph of nodes and edges, persisted as an append-only WAL — see [Overview](#overview).
 
 ## Data Model
 
