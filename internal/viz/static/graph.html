@@ -287,6 +287,7 @@ const SPRING_REST   = 160;
 const DAMPING       = 0.78;
 const ITERATIONS    = 1;
 const MIN_ENERGY    = 0.3;
+const POLL_INTERVAL_MS = 4000;
 
 // ── state ────────────────────────────────────────────────────────────────────
 let nodes = [], edges = [];
@@ -295,20 +296,73 @@ let focusedNodeId  = null;
 let hoveredNodeId  = null; // tracks mouse position regardless of panel state
 
 // ── fetch & boot ─────────────────────────────────────────────────────────────
+function updateStatsLabel() {
+  document.getElementById('statsLabel').textContent =
+    `${nodes.length} nodes · ${edges.length} edges`;
+}
+
 fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
   .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
   .then(data => {
     nodes = data.nodes || [];
     edges = data.edges || [];
-    document.getElementById('statsLabel').textContent =
-      `${nodes.length} nodes · ${edges.length} edges`;
+    updateStatsLabel();
     initSim();
     render();
     startSim();
+    setInterval(refreshGraph, POLL_INTERVAL_MS);
   })
   .catch(err => {
     document.getElementById('statsLabel').textContent = 'error: ' + err;
   });
+
+// ── incremental refresh (polling) ─────────────────────────────────────────────
+function refreshGraph() {
+  if (document.hidden) return;
+
+  fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
+    .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+    .then(data => {
+      const knownNodeIds = new Set(nodes.map(n => n.id));
+      const knownEdgeIds = new Set(edges.map(e => e.id));
+      const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+      const newNodes = (data.nodes || []).filter(n => !knownNodeIds.has(n.id));
+      const newEdges = (data.edges || []).filter(e => !knownEdgeIds.has(e.id));
+      if (!newNodes.length && !newEdges.length) return;
+
+      const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+      newNodes.forEach(n => {
+        const neighborIds = (data.edges || [])
+          .filter(e => e.from === n.id || e.to === n.id)
+          .map(e => e.from === n.id ? e.to : e.from)
+          .filter(id => nodeMap[id]);
+        if (neighborIds.length) {
+          n._x = neighborIds.reduce((sum, id) => sum + nodeMap[id]._x, 0) / neighborIds.length;
+          n._y = neighborIds.reduce((sum, id) => sum + nodeMap[id]._y, 0) / neighborIds.length;
+        } else {
+          n._x = cx; n._y = cy;
+        }
+        n._vx = n._vy = 0;
+        nodes.push(n);
+        nodeMap[n.id] = n;
+        createNodeEl(n);
+      });
+
+      newEdges.forEach(e => {
+        edges.push(e);
+        [e.from, e.to].forEach(id => {
+          if (!adjEdges[id]) adjEdges[id] = [];
+          adjEdges[id].push(e.id);
+        });
+        createEdgeEl(e);
+      });
+
+      updateStatsLabel();
+      if (!sim) startSim();
+    })
+    .catch(() => { /* transient poll failure, retry on next interval */ });
+}
 
 // ── physics ───────────────────────────────────────────────────────────────────
 function initSim() {
@@ -392,86 +446,89 @@ const nodeEls = {};
 // adjacency for focus highlighting
 const adjEdges = {}; // nodeId -> [edgeId, ...]
 
-function render() {
-  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+function createEdgeEl(e) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.classList.add('edge-line');
+  line.setAttribute('marker-end', 'url(#arrow)');
+  const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  label.classList.add('edge-label');
+  label.textContent = e.type.replace(/_/g, ' ');
+  g.appendChild(line);
+  g.appendChild(label);
+  edgeLayer.appendChild(g);
+  edgeEls[e.id] = { g, line, label, edge: e };
+}
 
+function createNodeEl(n) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  g.style.cursor = 'pointer';
+
+  const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  circle.classList.add('node-circle', n.type);
+  circle.setAttribute('r', NODE_R);
+
+  const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  labelEl.classList.add('node-label');
+  labelEl.textContent = truncate(n.summary);
+
+  const typeEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  typeEl.classList.add('node-type');
+  typeEl.textContent = n.type;
+
+  g.appendChild(circle);
+  g.appendChild(labelEl);
+  g.appendChild(typeEl);
+  nodeLayer.appendChild(g);
+  nodeEls[n.id] = { g, circle, labelEl, typeEl };
+
+  g.addEventListener('mouseenter', () => {
+    hoveredNodeId = n.id;
+    if (!detail.classList.contains('visible')) focusNode(n.id);
+  });
+  g.addEventListener('mouseleave', () => {
+    hoveredNodeId = null;
+    if (focusedNodeId === n.id && !detail.classList.contains('visible')) clearFocus();
+  });
+  g.addEventListener('click', ev => {
+    ev.stopPropagation();
+    openDetail(n);
+  });
+
+  // drag
+  g.addEventListener('mousedown', ev => {
+    if (ev.button !== 0) return;
+    ev.stopPropagation();
+    n._pinned = true;
+    n._vx = n._vy = 0;
+    if (!sim) startSim();
+    const onMove = ev2 => {
+      const pt = svgPoint(ev2.clientX, ev2.clientY);
+      n._x = pt.x; n._y = pt.y;
+      updatePositions();
+    };
+    const onUp = () => {
+      n._vx = n._vy = 0;
+      n._pinned = false;
+      if (!sim) startSim();
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+}
+
+function render() {
   edges.forEach(e => {
     [e.from, e.to].forEach(id => {
       if (!adjEdges[id]) adjEdges[id] = [];
       adjEdges[id].push(e.id);
     });
-
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.classList.add('edge-line');
-    line.setAttribute('marker-end', 'url(#arrow)');
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.classList.add('edge-label');
-    label.textContent = e.type.replace(/_/g, ' ');
-    g.appendChild(line);
-    g.appendChild(label);
-    edgeLayer.appendChild(g);
-    edgeEls[e.id] = { g, line, label, edge: e };
+    createEdgeEl(e);
   });
 
-  nodes.forEach(n => {
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.style.cursor = 'pointer';
-
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.classList.add('node-circle', n.type);
-    circle.setAttribute('r', NODE_R);
-
-    const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    labelEl.classList.add('node-label');
-    labelEl.textContent = truncate(n.summary);
-
-    const typeEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    typeEl.classList.add('node-type');
-    typeEl.textContent = n.type;
-
-    g.appendChild(circle);
-    g.appendChild(labelEl);
-    g.appendChild(typeEl);
-    nodeLayer.appendChild(g);
-    nodeEls[n.id] = { g, circle, labelEl, typeEl };
-
-    g.addEventListener('mouseenter', () => {
-      hoveredNodeId = n.id;
-      if (!detail.classList.contains('visible')) focusNode(n.id);
-    });
-    g.addEventListener('mouseleave', () => {
-      hoveredNodeId = null;
-      if (focusedNodeId === n.id && !detail.classList.contains('visible')) clearFocus();
-    });
-    g.addEventListener('click', ev => {
-      ev.stopPropagation();
-      openDetail(n);
-    });
-
-    // drag
-    g.addEventListener('mousedown', ev => {
-      if (ev.button !== 0) return;
-      ev.stopPropagation();
-      n._pinned = true;
-      n._vx = n._vy = 0;
-      if (!sim) startSim();
-      const onMove = ev2 => {
-        const pt = svgPoint(ev2.clientX, ev2.clientY);
-        n._x = pt.x; n._y = pt.y;
-        updatePositions();
-      };
-      const onUp = () => {
-        n._vx = n._vy = 0;
-        n._pinned = false;
-        if (!sim) startSim();
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    });
-  });
+  nodes.forEach(n => createNodeEl(n));
 }
 
 // ── focus / highlight ─────────────────────────────────────────────────────────
