@@ -35,7 +35,7 @@ func (s *Server) registerTools() {
 
 	register("list_topics", "List all available topics", listTopicsSchema, listTopicsHandler(s.manager))
 	register("get_topic", "Get topic metadata including the last cursor, node count, and edge count", getTopicSchema, getTopicHandler(s.manager))
-	register("read_nodes_since", "Read node summaries added after the given cursor (defaults to 0); use limit for pagination (default: 100)", readNodesSinceSchema, readNodesSinceHandler(s.manager))
+	register("read_nodes_since", "Read node summaries added after the given cursor (defaults to 0); use limit for pagination (default: 100); returns finding nodes only by default — pass types to narrow further or types:[\"*\"] for every type", readNodesSinceSchema, readNodesSinceHandler(s.manager))
 	register("read_node", "Get a node's full data along with all its edges (incoming and outgoing)", readNodeSchema, readNodeHandler(s.manager))
 	register("write", "Write nodes and/or edges to a topic; creates the topic if it does not exist", writeSchema, writeHandler(s.manager))
 }

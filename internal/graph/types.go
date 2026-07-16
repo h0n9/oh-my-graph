@@ -58,9 +58,14 @@ type WALRecord struct {
 }
 
 type NodeSummary struct {
-	NodeID  string `json:"node_id"`
-	Summary string `json:"summary"`
-	Seq     int64  `json:"seq"`
+	NodeID  string   `json:"node_id"`
+	Type    NodeType `json:"type"`
+	Summary string   `json:"summary"`
+	Seq     int64    `json:"seq"`
+}
+
+func IsValidNodeType(t NodeType) bool {
+	return validNodeTypes[t]
 }
 
 type NodeWithEdges struct {

@@ -54,9 +54,10 @@ func getTopicHandler(mgr *graph.Manager) handlerFunc {
 func readNodesSinceHandler(mgr *graph.Manager) handlerFunc {
 	return func(params json.RawMessage) (any, *RPCError) {
 		var p struct {
-			Topic  string `json:"topic"`
-			Cursor *int64 `json:"cursor"`
-			Limit  *int   `json:"limit"`
+			Topic  string    `json:"topic"`
+			Cursor *int64    `json:"cursor"`
+			Limit  *int      `json:"limit"`
+			Types  *[]string `json:"types"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil || p.Topic == "" {
 			return nil, &RPCError{Code: -32602, Message: "invalid params: topic required"}
@@ -75,12 +76,36 @@ func readNodesSinceHandler(mgr *graph.Manager) handlerFunc {
 			limit = *p.Limit
 		}
 
+		var types []graph.NodeType
+		switch {
+		case p.Types == nil:
+			types = []graph.NodeType{graph.NodeTypeFinding}
+		default:
+			wildcard := false
+			for _, t := range *p.Types {
+				if t == "*" {
+					wildcard = true
+					break
+				}
+			}
+			if !wildcard {
+				types = make([]graph.NodeType, 0, len(*p.Types))
+				for _, t := range *p.Types {
+					nt := graph.NodeType(t)
+					if !graph.IsValidNodeType(nt) {
+						return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("invalid params: unknown node type %q", t)}
+					}
+					types = append(types, nt)
+				}
+			}
+		}
+
 		g, err := mgr.Topic(p.Topic)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
 
-		summaries := g.NodesSince(cursor, limit)
+		summaries := g.NodesSince(cursor, limit, types)
 		if summaries == nil {
 			summaries = []graph.NodeSummary{}
 		}

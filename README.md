@@ -151,18 +151,18 @@ Each line is a WAL record:
 |------|-----------|---------|
 | `list_topics` | `()` | `[]string` |
 | `get_topic` | `(topic)` | `{last_cursor, node_count, edge_count}` |
-| `read_nodes_since` | `(topic, cursor?)` | `[]{node_id, summary, seq}` |
+| `read_nodes_since` | `(topic, cursor?, types?)` | `[]{node_id, type, summary, seq}` |
 | `read_node` | `(topic, node_id)` | full node + all edges (in & out) |
 | `write` | `(topic, nodes[], edges[])` | `{cursor}` |
 
-`cursor` defaults to `0` — read from the beginning.
+`cursor` defaults to `0` — read from the beginning. `types` defaults to `["finding"]` when omitted; pass `types:["*"]` to return every node type, or a specific list (e.g. `["decision"]`) to narrow further.
 
 ## Messaging
 
 Agents communicate asynchronously via `message` nodes in a shared topic:
 
 1. **Session A** writes a `message` node to topic `"comms"`
-2. **Session B** polls `read_nodes_since("comms", last_cursor)`, sees the message
+2. **Session B** polls `read_nodes_since("comms", last_cursor, types:["message"])`, sees the message — note the explicit `types` here, since `read_nodes_since` only returns `finding` nodes by default
 3. **Session B** replies with a new `message` node + `replies_to` edge pointing back
 
 No extra infrastructure needed — the graph is the message bus.
@@ -245,7 +245,7 @@ At the start of every session, connect to the `oh-my-graph` MCP server:
 
 1. Call `list_topics` to discover existing topics.
 2. Infer the topic from context — working directory name, project name, or the user's first message.
-3. Call `read_nodes_since(<topic>)` (cursor 0) to load existing context before responding.
+3. Call `read_nodes_since(<topic>)` (cursor 0) to load existing findings before responding. This defaults to `finding` nodes only — pass `types` (e.g. `["decision"]`) or `types:["*"]` if the session needs decisions, blockers, or questions too.
 
 During the session, call `write` frequently to persist findings, decisions, and artifacts. Link related nodes with edges to preserve reasoning chains.
 ````
