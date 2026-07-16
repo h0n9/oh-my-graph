@@ -288,6 +288,7 @@ const DAMPING       = 0.78;
 const ITERATIONS    = 1;
 const MIN_ENERGY    = 0.3;
 const POLL_INTERVAL_MS = 4000;
+const SPAWN_JITTER  = 20; // px; avoids exact-coincidence spawns, which are a repulsion singularity
 
 // ── state ────────────────────────────────────────────────────────────────────
 let nodes = [], edges = [];
@@ -343,6 +344,11 @@ function refreshGraph() {
         } else {
           n._x = cx; n._y = cy;
         }
+        // jitter so the spawn point never exactly coincides with another node
+        // (exact coincidence is a repulsion singularity: zero net force until
+        // floating-point drift breaks the tie, then an explosive correction)
+        n._x += (Math.random() - 0.5) * SPAWN_JITTER;
+        n._y += (Math.random() - 0.5) * SPAWN_JITTER;
         n._vx = n._vy = 0;
         nodes.push(n);
         nodeMap[n.id] = n;
