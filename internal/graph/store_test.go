@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -312,4 +313,198 @@ func BenchmarkWriteBatch(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		g.Write([]*Node{{NodeID: fmt.Sprintf("n%d", i), Type: NodeTypeFinding, Summary: "x"}}, nil)
 	}
+}
+
+func BenchmarkGetNode(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "graph.jsonl")
+	g, err := newTopicGraph(path)
+	if err != nil {
+		b.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	const n = 10000
+	nodes := make([]*Node, 0, n)
+	for i := 0; i < n; i++ {
+		nodes = append(nodes, &Node{NodeID: fmt.Sprintf("n%d", i), Type: NodeTypeFinding, Summary: "x"})
+	}
+	if _, err := g.Write(nodes, nil); err != nil {
+		b.Fatalf("Write nodes: %v", err)
+	}
+
+	// Chain edges so a mid-chain node has both an incoming and an outgoing
+	// edge (deg(v)=2) — a representative small-degree lookup.
+	edges := make([]*Edge, 0, n-1)
+	for i := 0; i < n-1; i++ {
+		edges = append(edges, &Edge{
+			EdgeID:     fmt.Sprintf("e%d", i),
+			Type:       EdgeTypeReferences,
+			FromNodeID: fmt.Sprintf("n%d", i),
+			ToNodeID:   fmt.Sprintf("n%d", i+1),
+		})
+	}
+	if _, err := g.Write(nil, edges); err != nil {
+		b.Fatalf("Write edges: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g.GetNode("n5000")
+	}
+}
+
+func BenchmarkNodesSinceWildcard(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "graph.jsonl")
+	g, err := newTopicGraph(path)
+	if err != nil {
+		b.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	const n = 50000
+	nodes := make([]*Node, 0, n)
+	for i := 0; i < n; i++ {
+		nodes = append(nodes, &Node{NodeID: fmt.Sprintf("f%d", i), Type: NodeTypeFinding, Summary: "x"})
+	}
+	if _, err := g.Write(nodes, nil); err != nil {
+		b.Fatalf("Write: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g.NodesSince(0, 10, nil)
+	}
+}
+
+func BenchmarkNodesSinceMultiType(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "graph.jsonl")
+	g, err := newTopicGraph(path)
+	if err != nil {
+		b.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	const perType = 10000
+	types := []NodeType{NodeTypeFinding, NodeTypeDecision, NodeTypeBlocker}
+	nodes := make([]*Node, 0, perType*len(types))
+	for _, t := range types {
+		for i := 0; i < perType; i++ {
+			nodes = append(nodes, &Node{NodeID: fmt.Sprintf("%s-%d", t, i), Type: t, Summary: "x"})
+		}
+	}
+	if _, err := g.Write(nodes, nil); err != nil {
+		b.Fatalf("Write: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g.NodesSince(0, 100, types)
+	}
+}
+
+func BenchmarkSnapshot(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "graph.jsonl")
+	g, err := newTopicGraph(path)
+	if err != nil {
+		b.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	const n = 10000
+	nodes := make([]*Node, 0, n)
+	for i := 0; i < n; i++ {
+		nodes = append(nodes, &Node{NodeID: fmt.Sprintf("n%d", i), Type: NodeTypeFinding, Summary: "x"})
+	}
+	if _, err := g.Write(nodes, nil); err != nil {
+		b.Fatalf("Write nodes: %v", err)
+	}
+	edges := make([]*Edge, 0, n/2)
+	for i := 0; i < n/2; i++ {
+		edges = append(edges, &Edge{
+			EdgeID:     fmt.Sprintf("e%d", i),
+			Type:       EdgeTypeReferences,
+			FromNodeID: fmt.Sprintf("n%d", i),
+			ToNodeID:   fmt.Sprintf("n%d", i+1),
+		})
+	}
+	if _, err := g.Write(nil, edges); err != nil {
+		b.Fatalf("Write edges: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g.Snapshot()
+	}
+}
+
+// BenchmarkTopicLoad measures cold-start cost: opening a topic backed by an
+// existing, already-populated WAL file (the O(L) path).
+func BenchmarkTopicLoad(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "graph.jsonl")
+	seed, err := newTopicGraph(path)
+	if err != nil {
+		b.Fatalf("newTopicGraph: %v", err)
+	}
+
+	const n = 20000
+	nodes := make([]*Node, 0, n)
+	for i := 0; i < n; i++ {
+		nodes = append(nodes, &Node{NodeID: fmt.Sprintf("n%d", i), Type: NodeTypeFinding, Summary: "x"})
+	}
+	if _, err := seed.Write(nodes, nil); err != nil {
+		b.Fatalf("Write: %v", err)
+	}
+	seed.Close() // ensure the WAL is fully flushed to disk before timing loads
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g, err := newTopicGraph(path)
+		if err != nil {
+			b.Fatalf("newTopicGraph: %v", err)
+		}
+		b.StopTimer()
+		g.Close()
+		b.StartTimer()
+	}
+}
+
+func BenchmarkWriteBatchLarge(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "graph.jsonl")
+	g, err := newTopicGraph(path)
+	if err != nil {
+		b.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	const batchSize = 50
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		nodes := make([]*Node, batchSize)
+		for j := 0; j < batchSize; j++ {
+			nodes[j] = &Node{NodeID: fmt.Sprintf("n%d-%d", i, j), Type: NodeTypeFinding, Summary: "x"}
+		}
+		if _, err := g.Write(nodes, nil); err != nil {
+			b.Fatalf("Write: %v", err)
+		}
+	}
+}
+
+// BenchmarkWriteParallel measures write throughput/lock contention under
+// concurrent callers, matching the shape of TestConcurrentWritesRemainConsistent.
+func BenchmarkWriteParallel(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "graph.jsonl")
+	g, err := newTopicGraph(path)
+	if err != nil {
+		b.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	var counter int64
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			id := atomic.AddInt64(&counter, 1)
+			g.Write([]*Node{{NodeID: fmt.Sprintf("n%d", id), Type: NodeTypeFinding, Summary: "x"}}, nil)
+		}
+	})
 }
