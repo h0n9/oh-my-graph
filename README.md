@@ -314,19 +314,37 @@ Requires Go 1.26+. No external dependencies.
 
 ## Benchmarks
 
-Measured on Apple M1 Pro (`go test ./internal/graph/... -bench=. -run=^$ -benchmem`):
+Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -bench=. -run=^$ -benchmem`):
+
+### Storage layer (`internal/graph`)
 
 | Benchmark | Scenario | Time/op | Memory/op | Allocs/op |
 |-----------|----------|---------|-----------|-----------|
-| `BenchmarkNodesSinceRareTypeFilter` | `read_nodes_since` filtered to a single type, with 1 matching node buried behind 50,000 nodes of another type | 57.4 ns | 65 B | 1 |
-| `BenchmarkWriteBatch` | `write` — single-node batch, including validation, the in-memory commit, and the async WAL append | 6.48 µs | 1,663 B | 11 |
+| `BenchmarkNodesSinceRareTypeFilter` | `read_nodes_since` filtered to a single type, with 1 matching node buried behind 50,000 nodes of another type | 57.5 ns | 64 B | 1 |
+| `BenchmarkNodesSinceWildcard` | `read_nodes_since` with no type filter, over 50,000 nodes | 348 ns | 581 B | 1 |
+| `BenchmarkNodesSinceMultiType` | `read_nodes_since` merging 3 types, 10,000 nodes each | 7.48 µs | 16.0 KB | 9 |
+| `BenchmarkGetNode` | `read_node` on a node with 2 edges, in a 10,000-node graph | 112 ns | 48 B | 2 |
+| `BenchmarkWriteBatch` | `write` — single-node batch (validate + in-memory commit + async WAL append) | 7.34 µs | 1.6 KB | 11 |
+| `BenchmarkWriteBatchLarge` | `write` — 50-node batch | 83.9 µs | 68.2 KB | 362 |
+| `BenchmarkWriteParallel` | `write` — single-node batches from concurrent callers | 7.48 µs | 1.2 KB | 10 |
+| `BenchmarkSnapshot` | full graph snapshot (backs `/api/graph`), 10,000 nodes + 5,000 edges | 138 µs | 121 KB | 3 |
+| `BenchmarkTopicLoad` | cold start: opening a topic backed by an existing 20,000-node WAL file | 55.9 ms | 24.0 MB | 320,230 |
 
-`read_nodes_since` keeps a separate log per node type, so filtering by type costs O(log N) regardless of how rare the requested type is, instead of scanning every node to find matches.
+`read_nodes_since` keeps a separate log per node type, so filtering by type costs O(log N) regardless of how rare the requested type is, instead of scanning every node to find matches. Cold-start topic load is the one operation that's still O(L) in total WAL history — everything else is O(1), O(log N), or O(deg(v)).
+
+### Protocol layer (`internal/mcp`) — full JSON-RPC round trip
+
+| Benchmark | Scenario | Time/op | Memory/op | Allocs/op |
+|-----------|----------|---------|-----------|-----------|
+| `BenchmarkWriteHandler` | `write` tool call — JSON args in, `Write`, JSON result out | 7.91 µs | 2.4 KB | 31 |
+| `BenchmarkReadNodesSinceHandler` | `read_nodes_since` tool call, default filter, over 1,000 seeded nodes | 17.7 µs | 18.3 KB | 11 |
+
+These include JSON marshal/unmarshal overhead on top of the storage-layer cost above — closer to what an actual MCP client call pays end to end.
 
 Reproduce locally:
 
 ```bash
-go test ./internal/graph/... -bench=. -run=^$ -benchmem
+go test ./internal/graph/... ./internal/mcp/... -bench=. -run=^$ -benchmem
 ```
 
 ## License
