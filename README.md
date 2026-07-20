@@ -312,6 +312,23 @@ make clean  # removes the binary
 
 Requires Go 1.26+. No external dependencies.
 
+## Benchmarks
+
+Measured on Apple M1 Pro (`go test ./internal/graph/... -bench=. -run=^$ -benchmem`):
+
+| Benchmark | Scenario | Time/op | Memory/op | Allocs/op |
+|-----------|----------|---------|-----------|-----------|
+| `BenchmarkNodesSinceRareTypeFilter` | `read_nodes_since` filtered to a single type, with 1 matching node buried behind 50,000 nodes of another type | 57.4 ns | 65 B | 1 |
+| `BenchmarkWriteBatch` | `write` — single-node batch, including validation, the in-memory commit, and the async WAL append | 6.48 µs | 1,663 B | 11 |
+
+`read_nodes_since` keeps a separate log per node type, so filtering by type costs O(log N) regardless of how rare the requested type is, instead of scanning every node to find matches.
+
+Reproduce locally:
+
+```bash
+go test ./internal/graph/... -bench=. -run=^$ -benchmem
+```
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE) for details.
