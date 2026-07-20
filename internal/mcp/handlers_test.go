@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/h0n9/oh-my-graph/internal/graph"
@@ -145,4 +147,50 @@ func TestReadNodesSinceHandler_TypesFilter(t *testing.T) {
 			t.Fatalf("expected all 5 nodes, got %d", len(summaries))
 		}
 	})
+}
+
+// BenchmarkWriteHandler measures the full path a real MCP client pays for:
+// JSON-unmarshaling the tool arguments, running the write, and
+// JSON-marshaling the result — not just the underlying graph.Write cost.
+func BenchmarkWriteHandler(b *testing.B) {
+	mgr := graph.NewManager(b.TempDir())
+	defer mgr.Close()
+	handler := writeHandler(mgr)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		params := json.RawMessage(fmt.Sprintf(
+			`{"topic":"bench","nodes":[{"node_id":"n%d","type":"finding","summary":"x"}]}`, i))
+		if _, rpcErr := handler(params); rpcErr != nil {
+			b.Fatalf("write: %v", rpcErr)
+		}
+	}
+}
+
+// BenchmarkReadNodesSinceHandler measures the full JSON-RPC path for the
+// default (types=["finding"]) read_nodes_since call against a modest,
+// pre-seeded topic.
+func BenchmarkReadNodesSinceHandler(b *testing.B) {
+	mgr := graph.NewManager(b.TempDir())
+	defer mgr.Close()
+	writeH := writeHandler(mgr)
+	readH := readNodesSinceHandler(mgr)
+
+	const n = 1000
+	nodes := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		nodes = append(nodes, fmt.Sprintf(`{"node_id":"n%d","type":"finding","summary":"x"}`, i))
+	}
+	seed := json.RawMessage(fmt.Sprintf(`{"topic":"bench","nodes":[%s]}`, strings.Join(nodes, ",")))
+	if _, rpcErr := writeH(seed); rpcErr != nil {
+		b.Fatalf("seed write: %v", rpcErr)
+	}
+
+	params := json.RawMessage(`{"topic":"bench","limit":100}`)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, rpcErr := readH(params); rpcErr != nil {
+			b.Fatalf("read: %v", rpcErr)
+		}
+	}
 }
