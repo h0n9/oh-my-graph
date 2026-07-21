@@ -68,7 +68,38 @@ func IsValidNodeType(t NodeType) bool {
 	return validNodeTypes[t]
 }
 
+func IsValidEdgeType(t EdgeType) bool {
+	return validEdgeTypes[t]
+}
+
 type NodeWithEdges struct {
 	Node  *Node   `json:"node"`
 	Edges []*Edge `json:"edges"`
+}
+
+type NodeRef struct {
+	NodeID  string   `json:"node_id"`
+	Type    NodeType `json:"type"`
+	Summary string   `json:"summary"`
+}
+
+type NeighborEdgeRef struct {
+	EdgeID    string   `json:"edge_id"`
+	Type      EdgeType `json:"type"`
+	Direction string   `json:"direction"` // "outgoing" | "incoming"
+}
+
+type Neighbor struct {
+	NodeID  string          `json:"node_id"`
+	Type    NodeType        `json:"type"`
+	Summary string          `json:"summary"`
+	Seq     int64           `json:"seq"`
+	Hop     int             `json:"hop"`
+	ViaEdge NeighborEdgeRef `json:"via_edge"`
+}
+
+type NeighborsResult struct {
+	Anchor    NodeRef    `json:"anchor"`
+	Neighbors []Neighbor `json:"neighbors"`
+	Truncated bool       `json:"truncated"`
 }
