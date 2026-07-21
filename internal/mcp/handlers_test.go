@@ -149,6 +149,120 @@ func TestReadNodesSinceHandler_TypesFilter(t *testing.T) {
 	})
 }
 
+func TestNeighborsHandler_Validation(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	writeH := writeHandler(mgr)
+	handler := neighborsHandler(mgr)
+
+	call := func(t *testing.T, params string) (any, *RPCError) {
+		t.Helper()
+		return handler(json.RawMessage(params))
+	}
+
+	seed := `{
+		"topic": "t1",
+		"nodes": [
+			{"node_id": "a", "type": "finding", "summary": "a"},
+			{"node_id": "b", "type": "finding", "summary": "b"}
+		],
+		"edges": [
+			{"edge_id": "e1", "type": "references", "from_node_id": "a", "to_node_id": "b"}
+		]
+	}`
+	if _, rpcErr := writeH(json.RawMessage(seed)); rpcErr != nil {
+		t.Fatalf("failed to seed graph: %v", rpcErr)
+	}
+
+	t.Run("missing topic is rejected", func(t *testing.T) {
+		_, rpcErr := call(t, `{"node_id": "a"}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for missing topic, got nil")
+		}
+	})
+
+	t.Run("missing node_id is rejected", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1"}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for missing node_id, got nil")
+		}
+	})
+
+	t.Run("depth 0 is rejected", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1", "node_id": "a", "depth": 0}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for depth=0, got nil")
+		}
+	})
+
+	t.Run("depth above max is rejected", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1", "node_id": "a", "depth": 4}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for depth=4, got nil")
+		}
+	})
+
+	t.Run("invalid direction is rejected", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1", "node_id": "a", "direction": "sideways"}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for invalid direction, got nil")
+		}
+	})
+
+	t.Run("invalid edge type is rejected", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1", "node_id": "a", "edge_types": ["bogus"]}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for invalid edge type, got nil")
+		}
+	})
+
+	t.Run("limit 0 is rejected", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1", "node_id": "a", "limit": 0}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for limit=0, got nil")
+		}
+	})
+
+	t.Run("limit above max is rejected", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1", "node_id": "a", "limit": 201}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for limit=201, got nil")
+		}
+	})
+
+	t.Run("limit at max is accepted", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1", "node_id": "a", "limit": 200}`)
+		if rpcErr != nil {
+			t.Fatalf("expected no error for limit=200, got %v", rpcErr)
+		}
+	})
+
+	t.Run("all params omitted uses defaults", func(t *testing.T) {
+		result, rpcErr := call(t, `{"topic": "t1", "node_id": "a"}`)
+		if rpcErr != nil {
+			t.Fatalf("expected no error with defaults, got %v", rpcErr)
+		}
+		res, ok := result.(*CallToolResult)
+		if !ok {
+			t.Fatalf("expected *CallToolResult, got %T", result)
+		}
+		var nr graph.NeighborsResult
+		if err := json.Unmarshal([]byte(res.Content[0].Text), &nr); err != nil {
+			t.Fatalf("failed to unmarshal result: %v", err)
+		}
+		if len(nr.Neighbors) != 1 || nr.Neighbors[0].NodeID != "b" {
+			t.Fatalf("expected neighbor b at default depth 1, got %+v", nr.Neighbors)
+		}
+	})
+
+	t.Run("unknown node_id returns not found error", func(t *testing.T) {
+		_, rpcErr := call(t, `{"topic": "t1", "node_id": "missing"}`)
+		if rpcErr == nil {
+			t.Fatal("expected error for unknown node_id, got nil")
+		}
+	})
+}
+
 // BenchmarkWriteHandler measures the full path a real MCP client pays for:
 // JSON-unmarshaling the tool arguments, running the write, and
 // JSON-marshaling the result — not just the underlying graph.Write cost.
@@ -191,6 +305,37 @@ func BenchmarkReadNodesSinceHandler(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, rpcErr := readH(params); rpcErr != nil {
 			b.Fatalf("read: %v", rpcErr)
+		}
+	}
+}
+
+// BenchmarkNeighborsHandler measures the full JSON-RPC path for a neighbors
+// call against a chain-shaped topic, mirroring BenchmarkGetNode's fixture.
+func BenchmarkNeighborsHandler(b *testing.B) {
+	mgr := graph.NewManager(b.TempDir())
+	defer mgr.Close()
+	writeH := writeHandler(mgr)
+	neighborsH := neighborsHandler(mgr)
+
+	const n = 1000
+	nodes := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		nodes = append(nodes, fmt.Sprintf(`{"node_id":"n%d","type":"finding","summary":"x"}`, i))
+	}
+	edges := make([]string, 0, n-1)
+	for i := 0; i < n-1; i++ {
+		edges = append(edges, fmt.Sprintf(`{"edge_id":"e%d","type":"references","from_node_id":"n%d","to_node_id":"n%d"}`, i, i, i+1))
+	}
+	seed := json.RawMessage(fmt.Sprintf(`{"topic":"bench","nodes":[%s],"edges":[%s]}`, strings.Join(nodes, ","), strings.Join(edges, ",")))
+	if _, rpcErr := writeH(seed); rpcErr != nil {
+		b.Fatalf("seed write: %v", rpcErr)
+	}
+
+	params := json.RawMessage(`{"topic":"bench","node_id":"n500","depth":2,"limit":50}`)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, rpcErr := neighborsH(params); rpcErr != nil {
+			b.Fatalf("neighbors: %v", rpcErr)
 		}
 	}
 }

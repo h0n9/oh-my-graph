@@ -10,6 +10,7 @@ import (
 type handlerFunc func(params json.RawMessage) (any, *RPCError)
 
 const maxNodesSinceLimit = 1000
+const maxNeighborsLimit = 200
 
 func callToolResult(text string) *CallToolResult {
 	return &CallToolResult{Content: []Content{{Type: "text", Text: text}}}
@@ -135,6 +136,80 @@ func readNodeHandler(mgr *graph.Manager) handlerFunc {
 		}
 
 		data, _ := json.Marshal(nwe)
+		return callToolResult(string(data)), nil
+	}
+}
+
+func neighborsHandler(mgr *graph.Manager) handlerFunc {
+	return func(params json.RawMessage) (any, *RPCError) {
+		var p struct {
+			Topic     string    `json:"topic"`
+			NodeID    string    `json:"node_id"`
+			Depth     *int      `json:"depth"`
+			Direction *string   `json:"direction"`
+			EdgeTypes *[]string `json:"edge_types"`
+			Limit     *int      `json:"limit"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.Topic == "" || p.NodeID == "" {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: topic and node_id required"}
+		}
+
+		depth := 1
+		if p.Depth != nil {
+			if *p.Depth < 1 || *p.Depth > 3 {
+				return nil, &RPCError{Code: -32602, Message: "invalid params: depth must be between 1 and 3"}
+			}
+			depth = *p.Depth
+		}
+
+		direction := "both"
+		if p.Direction != nil {
+			if *p.Direction != "outgoing" && *p.Direction != "incoming" && *p.Direction != "both" {
+				return nil, &RPCError{Code: -32602, Message: "invalid params: direction must be one of outgoing, incoming, both"}
+			}
+			direction = *p.Direction
+		}
+
+		var edgeTypes []graph.EdgeType
+		if p.EdgeTypes != nil {
+			wildcard := false
+			for _, t := range *p.EdgeTypes {
+				if t == "*" {
+					wildcard = true
+					break
+				}
+			}
+			if !wildcard {
+				edgeTypes = make([]graph.EdgeType, 0, len(*p.EdgeTypes))
+				for _, t := range *p.EdgeTypes {
+					et := graph.EdgeType(t)
+					if !graph.IsValidEdgeType(et) {
+						return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("invalid params: unknown edge type %q", t)}
+					}
+					edgeTypes = append(edgeTypes, et)
+				}
+			}
+		}
+
+		limit := 50
+		if p.Limit != nil {
+			if *p.Limit <= 0 || *p.Limit > maxNeighborsLimit {
+				return nil, &RPCError{Code: -32602, Message: "invalid params: limit must be between 1 and 200"}
+			}
+			limit = *p.Limit
+		}
+
+		g, err := mgr.Topic(p.Topic)
+		if err != nil {
+			return nil, &RPCError{Code: -32602, Message: err.Error()}
+		}
+
+		result, ok := g.Neighbors(p.NodeID, depth, direction, edgeTypes, limit)
+		if !ok {
+			return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("node %s not found", p.NodeID)}
+		}
+
+		data, _ := json.Marshal(result)
 		return callToolResult(string(data)), nil
 	}
 }
