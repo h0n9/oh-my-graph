@@ -46,6 +46,13 @@ type nodeLogEntry struct {
 	nodeID string
 }
 
+// maxEdgesPerNodeHop bounds how many of a single node's edges (per direction)
+// Neighbors() will consider at any one hop. Internal only, not exposed as a
+// tool param: it exists so one degenerate hub node can't blow up traversal
+// cost before the caller's own limit kicks in. Most-recent-N (tail of the
+// adjacency slice, which is append-ordered by seq).
+const maxEdgesPerNodeHop = 100
+
 type TopicGraph struct {
 	mu     sync.RWMutex
 	fileMu sync.Mutex
@@ -61,6 +68,9 @@ type TopicGraph struct {
 	// case for read_nodes_since, which defaults to type=finding) don't need to
 	// linear-scan past every other type to find matches.
 	typeLog map[NodeType][]nodeLogEntry
+	// nodeSeq is a reverse index of indexNode's nodeLog, letting Neighbors
+	// look up a node's seq in O(1) without scanning the log.
+	nodeSeq map[string]int64
 	headSeq int64
 	// readOffset is the byte offset up to which the WAL file has been fully
 	// parsed into memory. It lets reloadNewLines resume from where it left off
@@ -78,6 +88,7 @@ func newTopicGraph(path string) (*TopicGraph, error) {
 		adjOut:  make(map[string][]*Edge),
 		adjIn:   make(map[string][]*Edge),
 		typeLog: make(map[NodeType][]nodeLogEntry),
+		nodeSeq: make(map[string]int64),
 	}
 	if err := g.load(); err != nil {
 		return nil, err
@@ -103,6 +114,7 @@ func (g *TopicGraph) indexNode(seq int64, n *Node) {
 	entry := nodeLogEntry{seq: seq, nodeID: n.NodeID}
 	g.nodeLog = append(g.nodeLog, entry)
 	g.typeLog[n.Type] = append(g.typeLog[n.Type], entry)
+	g.nodeSeq[n.NodeID] = seq
 }
 
 // applyRecord applies a single WAL record to in-memory state. It is idempotent:
@@ -428,6 +440,114 @@ func (g *TopicGraph) GetNode(nodeID string) (*NodeWithEdges, bool) {
 	return &NodeWithEdges{Node: n, Edges: edges}, true
 }
 
+type neighborCandidate struct {
+	edge       *Edge
+	neighborID string
+	direction  string
+}
+
+// candidateEdges returns the (capped) outgoing/incoming edges of nodeID
+// relevant to direction ("outgoing", "incoming", or "both"). Callers must
+// hold g.mu (read or write lock).
+func (g *TopicGraph) candidateEdges(nodeID, direction string) []neighborCandidate {
+	var out []neighborCandidate
+	if direction == "outgoing" || direction == "both" {
+		for _, e := range capEdges(g.adjOut[nodeID]) {
+			out = append(out, neighborCandidate{edge: e, neighborID: e.ToNodeID, direction: "outgoing"})
+		}
+	}
+	if direction == "incoming" || direction == "both" {
+		for _, e := range capEdges(g.adjIn[nodeID]) {
+			out = append(out, neighborCandidate{edge: e, neighborID: e.FromNodeID, direction: "incoming"})
+		}
+	}
+	return out
+}
+
+// capEdges bounds edges to the most recent maxEdgesPerNodeHop (edges are
+// append-ordered by seq, so the tail is the most recent).
+func capEdges(edges []*Edge) []*Edge {
+	if len(edges) <= maxEdgesPerNodeHop {
+		return edges
+	}
+	return edges[len(edges)-maxEdgesPerNodeHop:]
+}
+
+// Neighbors performs a bounded BFS traversal from nodeID out to depth hops,
+// filtered by direction and edgeTypes (empty edgeTypes matches every type),
+// capped at limit results. It stops enqueueing new candidates the moment
+// limit is reached rather than collecting everything and truncating after,
+// so cost stays bounded to O(limit * avg_degree) even against a hub node.
+// Visited-set dedup means the shortest path to any neighbor always wins.
+func (g *TopicGraph) Neighbors(nodeID string, depth int, direction string, edgeTypes []EdgeType, limit int) (*NeighborsResult, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	anchor, ok := g.nodes[nodeID]
+	if !ok {
+		return nil, false
+	}
+
+	typeFilter := make(map[EdgeType]bool, len(edgeTypes))
+	for _, t := range edgeTypes {
+		typeFilter[t] = true
+	}
+	filterEdges := len(typeFilter) > 0
+
+	type queueItem struct {
+		nodeID string
+		hop    int
+	}
+
+	visited := map[string]bool{nodeID: true}
+	queue := []queueItem{{nodeID: nodeID, hop: 0}}
+	neighbors := make([]Neighbor, 0, limit)
+	truncated := false
+
+outer:
+	for len(queue) > 0 {
+		item := queue[0]
+		queue = queue[1:]
+
+		if item.hop >= depth {
+			continue
+		}
+
+		for _, c := range g.candidateEdges(item.nodeID, direction) {
+			if filterEdges && !typeFilter[c.edge.Type] {
+				continue
+			}
+			if visited[c.neighborID] {
+				continue
+			}
+			if len(neighbors) >= limit {
+				truncated = true
+				break outer
+			}
+			n, ok := g.nodes[c.neighborID]
+			if !ok {
+				continue
+			}
+			visited[c.neighborID] = true
+			neighbors = append(neighbors, Neighbor{
+				NodeID:  n.NodeID,
+				Type:    n.Type,
+				Summary: n.Summary,
+				Seq:     g.nodeSeq[n.NodeID],
+				Hop:     item.hop + 1,
+				ViaEdge: NeighborEdgeRef{EdgeID: c.edge.EdgeID, Type: c.edge.Type, Direction: c.direction},
+			})
+			queue = append(queue, queueItem{nodeID: c.neighborID, hop: item.hop + 1})
+		}
+	}
+
+	return &NeighborsResult{
+		Anchor:    NodeRef{NodeID: anchor.NodeID, Type: anchor.Type, Summary: anchor.Summary},
+		Neighbors: neighbors,
+		Truncated: truncated,
+	}, true
+}
+
 func (g *TopicGraph) Stats() (headSeq int64, nodeCount, edgeCount int) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -516,6 +636,7 @@ func (g *TopicGraph) reloadNewLines() {
 		g.adjIn = make(map[string][]*Edge)
 		g.nodeLog = nil
 		g.typeLog = make(map[NodeType][]nodeLogEntry)
+		g.nodeSeq = make(map[string]int64)
 		g.headSeq = 0
 		g.readOffset = 0
 	}
