@@ -101,6 +101,24 @@ const readNodeSchema = `{
   "required": ["topic", "node_id"]
 }`
 
+const neighborsSchema = `{
+  "type": "object",
+  "properties": {
+    "topic":       { "type": "string", "description": "Topic name" },
+    "node_id":     { "type": "string", "description": "Anchor node ID to traverse from" },
+    "depth":       { "type": "integer", "description": "Max hops to traverse (default: 1)", "default": 1, "minimum": 1, "maximum": 3 },
+    "direction":   { "type": "string", "description": "Edge direction to follow (default: both)", "enum": ["outgoing", "incoming", "both"], "default": "both" },
+    "edge_types":  {
+      "type": "array",
+      "items": { "type": "string", "enum": ["*","resolves","produces","blocks","causes","supports","contradicts","depends_on","part_of","references","replies_to","deprecates"] },
+      "default": ["*"],
+      "description": "Edge types to include. Defaults to [\"*\"] (all types). Distinct from read_nodes_since's node-type filter."
+    },
+    "limit": { "type": "integer", "description": "Maximum number of neighbors to return (default: 50; must be between 1 and 200)", "default": 50, "minimum": 1, "maximum": 200 }
+  },
+  "required": ["topic", "node_id"]
+}`
+
 const writeSchema = `{
   "type": "object",
   "properties": {

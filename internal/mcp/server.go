@@ -37,6 +37,7 @@ func (s *Server) registerTools() {
 	register("get_topic", "Get topic metadata including the last cursor, node count, and edge count", getTopicSchema, getTopicHandler(s.manager))
 	register("read_nodes_since", "Read node summaries added after the given cursor (defaults to 0); use limit for pagination (default: 100); returns finding nodes only by default — pass types to narrow further or types:[\"*\"] for every type", readNodesSinceSchema, readNodesSinceHandler(s.manager))
 	register("read_node", "Get a node's full data along with all its edges (incoming and outgoing)", readNodeSchema, readNodeHandler(s.manager))
+	register("neighbors", "Get a node's neighbors via BFS traversal (default depth 1, both directions, all edge types); returns summary-level nodes with hop distance and connecting edge — use for graph-local relevance expansion before read_node", neighborsSchema, neighborsHandler(s.manager))
 	register("write", "Write nodes and/or edges to a topic; creates the topic if it does not exist", writeSchema, writeHandler(s.manager))
 }
 
