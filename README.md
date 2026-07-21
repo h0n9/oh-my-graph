@@ -153,9 +153,12 @@ Each line is a WAL record:
 | `get_topic` | `(topic)` | `{last_cursor, node_count, edge_count}` |
 | `read_nodes_since` | `(topic, cursor?, types?)` | `[]{node_id, type, summary, seq}` |
 | `read_node` | `(topic, node_id)` | full node + all edges (in & out) |
+| `neighbors` | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
 | `write` | `(topic, nodes[], edges[])` | `{cursor}` |
 
 `cursor` defaults to `0` — read from the beginning. `types` defaults to `["finding"]` when omitted; pass `types:["*"]` to return every node type, or a specific list (e.g. `["decision"]`) to narrow further.
+
+`neighbors` does a BFS traversal from `node_id` out to `depth` hops (1–3, default 1), following `direction` (`outgoing`|`incoming`|`both`, default `both`) and filtering by `edge_types` (default `["*"]`, all types — a separate axis from `read_nodes_since`'s node-type filter). Returns summary-level neighbors only (no `description`) capped at `limit` (default 50, max 200); `truncated` is `true` if the reachable set exceeded `limit`. Use it to expand outward from an anchor node found via `read_nodes_since` before spending a `read_node` call on the short list.
 
 ## Messaging
 
@@ -209,7 +212,7 @@ Add the following to your Claude Desktop config file:
 
 > The port above (`7780`) is the default. If you started the server with a different port, update the URL accordingly.
 
-Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `write`) will appear automatically in your Claude sessions.
+Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `neighbors`, `write`) will appear automatically in your Claude sessions.
 
 ### Claude Code
 
@@ -246,6 +249,7 @@ At the start of every session, connect to the `oh-my-graph` MCP server:
 1. Call `list_topics` to discover existing topics.
 2. Infer the topic from context — working directory name, project name, or the user's first message.
 3. Call `read_nodes_since(<topic>)` (cursor 0) to load existing findings before responding. This defaults to `finding` nodes only — pass `types` (e.g. `["decision"]`) or `types:["*"]` if the session needs decisions, blockers, or questions too.
+4. When a node from that skim looks relevant, call `neighbors(<topic>, node_id, depth: 2)` to pull in its graph-local context before deciding whether to spend a full `read_node` call on it.
 
 During the session, call `write` frequently to persist findings, decisions, and artifacts. Link related nodes with edges to preserve reasoning chains.
 ````
@@ -261,7 +265,7 @@ mcp_servers:
     url: http://localhost:7780/mcp
 ```
 
-Codex will surface the `list_topics`, `get_topic`, `read_nodes_since`, `read_node`, and `write` tools in every session.
+Codex will surface the `list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `neighbors`, and `write` tools in every session.
 
 ## Syncing across devices
 
@@ -324,13 +328,15 @@ Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -benc
 | `BenchmarkNodesSinceWildcard` | `read_nodes_since` with no type filter, over 50,000 nodes | 348 ns | 581 B | 1 |
 | `BenchmarkNodesSinceMultiType` | `read_nodes_since` merging 3 types, 10,000 nodes each | 7.48 µs | 16.0 KB | 9 |
 | `BenchmarkGetNode` | `read_node` on a node with 2 edges, in a 10,000-node graph | 112 ns | 48 B | 2 |
+| `BenchmarkNeighborsChain` | `neighbors` — depth 2, both directions, mid-chain anchor in a 10,000-node chain | 1.68 µs | 6.8 KB | 11 |
+| `BenchmarkNeighborsHub` | `neighbors` — depth 1 from a hub node with 10,000 outgoing edges, limit 50 (bounded by the internal per-node edge cap, not degree) | 10.7 µs | 24.9 KB | 23 |
 | `BenchmarkWriteBatch` | `write` — single-node batch (validate + in-memory commit + async WAL append) | 7.34 µs | 1.6 KB | 11 |
 | `BenchmarkWriteBatchLarge` | `write` — 50-node batch | 83.9 µs | 68.2 KB | 362 |
 | `BenchmarkWriteParallel` | `write` — single-node batches from concurrent callers | 7.48 µs | 1.2 KB | 10 |
 | `BenchmarkSnapshot` | full graph snapshot (backs `/api/graph`), 10,000 nodes + 5,000 edges | 138 µs | 121 KB | 3 |
 | `BenchmarkTopicLoad` | cold start: opening a topic backed by an existing 20,000-node WAL file | 55.9 ms | 24.0 MB | 320,230 |
 
-`read_nodes_since` keeps a separate log per node type, so filtering by type costs O(log N) regardless of how rare the requested type is, instead of scanning every node to find matches. Cold-start topic load is the one operation that's still O(L) in total WAL history — everything else is O(1), O(log N), or O(deg(v)).
+`read_nodes_since` keeps a separate log per node type, so filtering by type costs O(log N) regardless of how rare the requested type is, instead of scanning every node to find matches. `neighbors` is a bounded BFS: it stops enqueueing the moment `limit` is reached rather than collecting then truncating, and caps how many edges of any single node it considers per hop — so cost stays O(limit × avg_degree) even against a degenerate hub node, as `BenchmarkNeighborsHub` shows. Cold-start topic load is the one operation that's still O(L) in total WAL history — everything else is O(1), O(log N), or bounded by the caller's own limit.
 
 ### Protocol layer (`internal/mcp`) — full JSON-RPC round trip
 
@@ -338,6 +344,7 @@ Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -benc
 |-----------|----------|---------|-----------|-----------|
 | `BenchmarkWriteHandler` | `write` tool call — JSON args in, `Write`, JSON result out | 7.91 µs | 2.4 KB | 31 |
 | `BenchmarkReadNodesSinceHandler` | `read_nodes_since` tool call, default filter, over 1,000 seeded nodes | 17.7 µs | 18.3 KB | 11 |
+| `BenchmarkNeighborsHandler` | `neighbors` tool call — depth 2, limit 50, mid-chain anchor in a 1,000-node chain | 4.30 µs | 8.5 KB | 22 |
 
 These include JSON marshal/unmarshal overhead on top of the storage-layer cost above — closer to what an actual MCP client call pays end to end.
 
