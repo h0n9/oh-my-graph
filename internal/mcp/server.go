@@ -42,10 +42,6 @@ func (s *Server) registerTools() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/mcp" {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
