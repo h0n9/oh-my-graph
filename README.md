@@ -40,10 +40,10 @@ brew services start h0n9/devops/oh-my-graph
 
 If you'd like to share the graph across multiple Macs, refer to the [Syncing across devices](#syncing-across-devices) section.
 
-**Linux** — download the pre-built binary and place it in your `PATH` (replace `{VERSION}` with the desired version and `{ARCH}` with the architecture):
+**Linux (or macOS without Homebrew)** — one-line installer, detects OS/arch and installs to `~/.local/bin` (override with `INSTALL_DIR`; pin a version with `VERSION=vX.Y.Z`):
 
 ```bash
-curl -sL https://github.com/h0n9/oh-my-graph/releases/download/v{VERSION}/oh-my-graph_linux_{ARCH}.tar.gz | tar xz -C /usr/local/bin
+curl -fsSL https://raw.githubusercontent.com/h0n9/oh-my-graph/main/install.sh | sh
 ```
 
 The server runs on port **7780** by default. Point your MCP client at `http://localhost:7780/mcp`.
@@ -303,6 +303,78 @@ brew services start h0n9/devops/oh-my-graph
 ```
 
 > Make sure only one machine runs the server at a time to avoid concurrent writes to the same file.
+
+## Hosting on Sprites
+
+Run oh-my-graph as an always-on remote MCP server on [Sprites](https://sprites.dev) instead of on your local machine.
+
+### Setup
+
+```bash
+curl -fsSL https://sprites.dev/install.sh | sh
+sprite org auth
+sprite create oh-my-graph
+sprite use oh-my-graph
+```
+
+Install the release binary onto the sprite with the same installer used above:
+
+```bash
+sprite exec -- bash -c "export INSTALL_DIR=/home/sprite; curl -fsSL https://raw.githubusercontent.com/h0n9/oh-my-graph/main/install.sh | sh"
+```
+
+Register it as a persistent [service](https://docs.sprites.dev/concepts/services/), bound to the sprite's public port so it restarts across hibernation/reboot:
+
+```bash
+sprite exec -- sprite-env services create oh-my-graph --cmd /home/sprite/oh-my-graph --args "--port,7780,--data,/home/sprite/.oh-my-graph" --http-port 7780
+```
+
+**Migrating existing data:** tar up your local data directory and upload it before starting the service:
+
+```bash
+tar -czf data.tar.gz -C ~/.oh-my-graph .
+sprite exec --file "data.tar.gz:/home/sprite/data.tar.gz" -- bash -c "mkdir -p /home/sprite/.oh-my-graph && tar -xzf /home/sprite/data.tar.gz -C /home/sprite/.oh-my-graph && rm /home/sprite/data.tar.gz"
+```
+
+### Connecting
+
+Leave the sprite's URL at its default `sprite` auth mode (org-private) rather than switching it to `public` — the MCP endpoint has no auth of its own, so anything that can reach it has full read/write access to every topic.
+
+> **`/mcp` vs `/omg-mcp`:** Sprites' own gateway reserves the literal path `/mcp` on every `*.sprites.app` URL for its own hosted control-plane MCP server ([docs](https://docs.sprites.dev/integrations/remote-mcp/)), which collides with oh-my-graph's endpoint. For this reason oh-my-graph serves its MCP handler at **both** `/mcp` and `/omg-mcp` (identical, same handler) — use `/omg-mcp` when connecting through a sprite's public URL; `/mcp` still works for local/internal use (e.g. `sprite exec -- curl localhost:7780/mcp`).
+
+```bash
+curl -H "Authorization: Bearer $SPRITE_TOKEN" https://<sprite>-<org>.sprites.app/omg-mcp
+```
+
+Get a token at `sprites.dev/account`.
+
+**Claude Desktop** (stdio-only — bridge via [`mcp-remote`](https://github.com/geelen/mcp-remote)):
+
+```json
+{
+  "mcpServers": {
+    "oh-my-graph": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://<sprite>-<org>.sprites.app/omg-mcp",
+        "--header",
+        "Authorization:${SPRITE_AUTH}"
+      ],
+      "env": {
+        "SPRITE_AUTH": "Bearer <your-sprites-org-token>"
+      }
+    }
+  }
+}
+```
+
+**Claude Code** (native Streamable HTTP MCP, no bridge needed):
+
+```bash
+claude mcp add --transport http --header "Authorization: Bearer \${SPRITE_TOKEN}" oh-my-graph https://<sprite>-<org>.sprites.app/omg-mcp
+```
 
 ## Development
 
