@@ -375,7 +375,7 @@ Get a token at `sprites.dev/account`.
 **Claude Code** (native Streamable HTTP MCP, no bridge needed):
 
 ```bash
-claude mcp add --transport http --header "Authorization: Bearer \${SPRITE_TOKEN}" oh-my-graph https://<sprite>-<org>.sprites.app/omg-mcp
+claude mcp add --transport http oh-my-graph https://<sprite>-<org>.sprites.app/omg-mcp --header "Authorization: Bearer \${SPRITE_TOKEN}"
 ```
 
 ## Development
