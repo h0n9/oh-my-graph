@@ -34,7 +34,12 @@ func main() {
 	mgr := graph.NewManager(dir)
 
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcp.NewServer(mgr))
+	mcpServer := mcp.NewServer(mgr)
+	mux.Handle("/mcp", mcpServer)
+	// Some hosts (e.g. Sprites' public gateway) reserve "/mcp" for their own
+	// control-plane MCP server; expose the same handler under an alias so
+	// oh-my-graph's MCP endpoint is still reachable there.
+	mux.Handle("/omg-mcp", mcpServer)
 	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"version":%q}`, Version)
