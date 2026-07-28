@@ -46,6 +46,8 @@ If you'd like to share the graph across multiple Macs, refer to the [Syncing acr
 curl -fsSL https://raw.githubusercontent.com/h0n9/oh-my-graph/main/install.sh | sh
 ```
 
+Prefer not to run it on your own machine? See [Hosting on Sprites](#hosting-on-sprites) for running oh-my-graph as an always-on remote server instead.
+
 The server runs on port **7780** by default. Point your MCP client at `http://localhost:7780/mcp`.
 
 Check the following sections for instructions on connecting MCP client to `oh-my-graph`:
