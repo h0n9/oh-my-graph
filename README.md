@@ -340,9 +340,13 @@ sprite exec --file "data.tar.gz:/home/sprite/data.tar.gz" -- bash -c "mkdir -p /
 
 ### Connecting
 
-Leave the sprite's URL at its default `sprite` auth mode (org-private) rather than switching it to `public` — the MCP endpoint has no auth of its own, so anything that can reach it has full read/write access to every topic.
-
 > **`/mcp` vs `/omg-mcp`:** Sprites' own gateway reserves the literal path `/mcp` on every `*.sprites.app` URL for its own hosted control-plane MCP server ([docs](https://docs.sprites.dev/integrations/remote-mcp/)), which collides with oh-my-graph's endpoint. For this reason oh-my-graph serves its MCP handler at **both** `/mcp` and `/omg-mcp` (identical, same handler) — use `/omg-mcp` when connecting through a sprite's public URL; `/mcp` still works for local/internal use (e.g. `sprite exec -- curl localhost:7780/mcp`).
+
+oh-my-graph itself ships with **no auth by default** — `--auth` is off unless you pass it. That means access control comes from exactly one of the two layers below; pick one.
+
+#### Option A — Sprite gateway auth (default)
+
+Leave the sprite's URL at its default `sprite` auth mode (org-private) and run oh-my-graph without `--auth`. Anything that can present a valid Sprites org bearer token can reach the endpoint, so keep the URL private — the app itself does no authentication in this mode.
 
 ```bash
 curl -H "Authorization: Bearer $SPRITE_TOKEN" https://<sprite>-<org>.sprites.app/omg-mcp
@@ -377,6 +381,19 @@ Get a token at `sprites.dev/account`.
 ```bash
 claude mcp add --transport http oh-my-graph https://<sprite>-<org>.sprites.app/omg-mcp --header "Authorization: Bearer \${SPRITE_TOKEN}"
 ```
+
+This option doesn't work for clients that can't send custom headers or a static bearer token — notably ChatGPT, which has no such field. Use Option B for those.
+
+#### Option B — OMG OAuth (opt-in, for clients with no static-credential field)
+
+Run oh-my-graph with `--auth` and set two env vars: `OMG_ISSUER` (the server's own public base URL) and `OMG_OWNER_PASSPHRASE` (a shared secret only you know). This turns on a full OAuth 2.1 Authorization Code + PKCE flow with RFC 7591 Dynamic Client Registration and RFC 9728/8414 discovery metadata — the same "MCP OAuth" flow the MCP Authorization spec describes — gated by the passphrase at `/authorize`. Since the app is now the access-control boundary, set the sprite's URL to `public` so the (redundant, and incompatible with DCR clients) Sprites gateway token isn't also required:
+
+```bash
+sprite exec -- sprite-env services create oh-my-graph --cmd /home/sprite/oh-my-graph --args "--port,7780,--data,/home/sprite/.oh-my-graph,--auth" --env "OMG_ISSUER=https://<sprite>-<org>.sprites.app,OMG_OWNER_PASSPHRASE=<your-passphrase>" --http-port 7780
+sprite url update --auth public -s oh-my-graph
+```
+
+Then just add `https://<sprite>-<org>.sprites.app/omg-mcp` as the connector URL in Claude or ChatGPT — no header, no client ID, no client secret. The client self-registers via DCR, your browser prompts once for the passphrase, and it's authorized from then on (until the server restarts, since all client/token state is in-memory).
 
 ## Development
 
