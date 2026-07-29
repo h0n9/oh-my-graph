@@ -108,6 +108,7 @@ func (s *Server) RequireBearer(next http.Handler) http.Handler {
 		const prefix = "Bearer "
 		authz := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authz, prefix) {
+			log.Printf("oh-my-graph/auth: bearer: rejected %s %s: missing/malformed Authorization header (got %q)", r.Method, r.URL.Path, authz)
 			s.unauthorized(w)
 			return
 		}
@@ -117,6 +118,7 @@ func (s *Server) RequireBearer(next http.Handler) http.Handler {
 		at, ok := s.tokens[tok]
 		s.mu.Unlock()
 		if !ok || time.Now().After(at.ExpiresAt) {
+			log.Printf("oh-my-graph/auth: bearer: rejected %s %s: token known=%v expired=%v", r.Method, r.URL.Path, ok, ok && time.Now().After(at.ExpiresAt))
 			s.unauthorized(w)
 			return
 		}
@@ -183,16 +185,20 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("oh-my-graph/auth: register: malformed JSON body: %v", err)
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata", "malformed JSON body")
 		return
 	}
+	log.Printf("oh-my-graph/auth: register: client_name=%q redirect_uris=%q token_endpoint_auth_method=%q", req.ClientName, req.RedirectURIs, req.TokenEndpointAuthMethod)
 	if len(req.RedirectURIs) == 0 {
+		log.Printf("oh-my-graph/auth: register: rejected: no redirect_uris")
 		writeOAuthError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris is required")
 		return
 	}
 	for _, u := range req.RedirectURIs {
 		parsed, err := url.ParseRequestURI(u)
 		if err != nil || parsed.Scheme == "" {
+			log.Printf("oh-my-graph/auth: register: rejected: invalid redirect_uris entry %q: %v", u, err)
 			writeOAuthError(w, http.StatusBadRequest, "invalid_redirect_uri", "invalid redirect_uris entry: "+u)
 			return
 		}
@@ -242,6 +248,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.clients[clientID] = c
 	s.mu.Unlock()
 
+	log.Printf("oh-my-graph/auth: register: issued client_id=%s auth_method=%s", clientID, authMethod)
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -339,8 +346,10 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		p := parseAuthorizeParams(r.URL.Query())
+		log.Printf("oh-my-graph/auth: authorize GET: client_id=%q redirect_uri=%q response_type=%q code_challenge_method=%q state=%q", p.ClientID, p.RedirectURI, p.ResponseType, p.CodeChallengeMethod, p.State)
 		c, mustNotRedirect, errCode, errDesc := s.validateAuthorizeParams(p)
 		if errCode != "" {
+			log.Printf("oh-my-graph/auth: authorize GET: rejected client_id=%q: %s (%s) mustNotRedirect=%v", p.ClientID, errCode, errDesc, mustNotRedirect)
 			if mustNotRedirect {
 				http.Error(w, errDesc, http.StatusBadRequest)
 				return
@@ -352,12 +361,15 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		if err := r.ParseForm(); err != nil {
+			log.Printf("oh-my-graph/auth: authorize POST: invalid form body: %v", err)
 			http.Error(w, "invalid form body", http.StatusBadRequest)
 			return
 		}
 		p := parseAuthorizeParams(r.PostForm)
+		log.Printf("oh-my-graph/auth: authorize POST: client_id=%q redirect_uri=%q state=%q", p.ClientID, p.RedirectURI, p.State)
 		c, mustNotRedirect, errCode, errDesc := s.validateAuthorizeParams(p)
 		if errCode != "" {
+			log.Printf("oh-my-graph/auth: authorize POST: rejected client_id=%q: %s (%s) mustNotRedirect=%v", p.ClientID, errCode, errDesc, mustNotRedirect)
 			if mustNotRedirect {
 				http.Error(w, errDesc, http.StatusBadRequest)
 				return
@@ -368,6 +380,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 		passphrase := r.PostForm.Get("passphrase")
 		if subtle.ConstantTimeCompare([]byte(passphrase), []byte(s.ownerPassphrase)) != 1 {
+			log.Printf("oh-my-graph/auth: authorize POST: incorrect passphrase for client_id=%s", p.ClientID)
 			s.renderAuthorizeForm(w, p, c.Name, "Incorrect passphrase. Try again.")
 			return
 		}
@@ -399,6 +412,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 			q.Set("state", p.State)
 		}
 		redirectURL.RawQuery = q.Encode()
+		log.Printf("oh-my-graph/auth: authorize POST: issued code for client_id=%q (redirect target and code omitted from log)", p.ClientID)
 		http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 
 	default:
@@ -441,27 +455,48 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
+		log.Printf("oh-my-graph/auth: token: malformed form body: %v", err)
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "malformed form body")
 		return
 	}
 
-	switch r.PostForm.Get("grant_type") {
+	grantType := r.PostForm.Get("grant_type")
+	log.Printf("oh-my-graph/auth: token: grant_type=%q client_id=%q", grantType, r.PostForm.Get("client_id"))
+	switch grantType {
 	case "authorization_code":
-		s.handleAuthorizationCodeGrant(w, r.PostForm)
+		s.handleAuthorizationCodeGrant(w, r)
 	case "refresh_token":
-		s.handleRefreshTokenGrant(w, r.PostForm)
+		s.handleRefreshTokenGrant(w, r)
 	default:
+		log.Printf("oh-my-graph/auth: token: unsupported grant_type=%q", grantType)
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "supported grant types: authorization_code, refresh_token")
 	}
 }
 
-func (s *Server) authenticateClient(form url.Values) (*client, string, string) {
-	c, ok := s.lookupClient(form.Get("client_id"))
+// authenticateClient supports both confidential-client auth styles advertised
+// in discovery metadata: client_secret_basic (RFC 6749 §2.3.1 -- client_id and
+// client_secret as HTTP Basic Auth credentials on the request, NOT form
+// fields) and client_secret_post (client_secret as a form field). Basic Auth
+// takes precedence when present.
+func (s *Server) authenticateClient(r *http.Request, form url.Values) (*client, string, string) {
+	clientID := form.Get("client_id")
+	var secret string
+	var haveSecret bool
+	if basicUser, basicPass, ok := r.BasicAuth(); ok {
+		clientID = basicUser
+		secret = basicPass
+		haveSecret = true
+	} else if v := form.Get("client_secret"); v != "" {
+		secret = v
+		haveSecret = true
+	}
+
+	c, ok := s.lookupClient(clientID)
 	if !ok {
 		return nil, "invalid_client", "unknown client_id"
 	}
 	if c.TokenEndpointAuthMethod != "none" {
-		if subtle.ConstantTimeCompare([]byte(form.Get("client_secret")), []byte(c.Secret)) != 1 {
+		if !haveSecret || subtle.ConstantTimeCompare([]byte(secret), []byte(c.Secret)) != 1 {
 			return nil, "invalid_client", "client authentication failed"
 		}
 	}
@@ -475,9 +510,11 @@ func (s *Server) lookupClient(id string) (*client, bool) {
 	return c, ok
 }
 
-func (s *Server) handleAuthorizationCodeGrant(w http.ResponseWriter, form url.Values) {
-	c, errCode, desc := s.authenticateClient(form)
+func (s *Server) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request) {
+	form := r.PostForm
+	c, errCode, desc := s.authenticateClient(r, form)
 	if errCode != "" {
+		log.Printf("oh-my-graph/auth: token authorization_code: client auth failed for client_id=%q: %s", form.Get("client_id"), desc)
 		writeOAuthError(w, http.StatusUnauthorized, errCode, desc)
 		return
 	}
@@ -491,25 +528,30 @@ func (s *Server) handleAuthorizationCodeGrant(w http.ResponseWriter, form url.Va
 	s.mu.Unlock()
 
 	if !ok || time.Now().After(ac.ExpiresAt) {
+		log.Printf("oh-my-graph/auth: token authorization_code: code invalid or expired for client_id=%s (known=%v)", c.ID, ok)
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
 		return
 	}
 	if ac.ClientID != c.ID || ac.RedirectURI != form.Get("redirect_uri") {
+		log.Printf("oh-my-graph/auth: token authorization_code: mismatch: code.client_id=%s got=%s code.redirect_uri=%q got=%q", ac.ClientID, c.ID, ac.RedirectURI, form.Get("redirect_uri"))
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "client_id or redirect_uri mismatch")
 		return
 	}
 
 	verifier := form.Get("code_verifier")
 	if verifier == "" || oauth2.S256ChallengeFromVerifier(verifier) != ac.CodeChallenge {
+		log.Printf("oh-my-graph/auth: token authorization_code: PKCE verification failed for client_id=%s (verifier present=%v)", c.ID, verifier != "")
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "PKCE verification failed")
 		return
 	}
 
+	log.Printf("oh-my-graph/auth: token authorization_code: success for client_id=%s", c.ID)
 	s.issueTokenPair(w, c.ID, ac.Scope)
 }
 
-func (s *Server) handleRefreshTokenGrant(w http.ResponseWriter, form url.Values) {
-	c, errCode, desc := s.authenticateClient(form)
+func (s *Server) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request) {
+	form := r.PostForm
+	c, errCode, desc := s.authenticateClient(r, form)
 	if errCode != "" {
 		writeOAuthError(w, http.StatusUnauthorized, errCode, desc)
 		return
