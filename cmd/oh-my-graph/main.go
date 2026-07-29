@@ -46,7 +46,11 @@ func main() {
 		if issuer == "" || passphrase == "" {
 			log.Fatal("oh-my-graph: --auth requires OMG_ISSUER and OMG_OWNER_PASSPHRASE to be set")
 		}
-		authSrv := auth.NewServer(auth.Config{Issuer: issuer, OwnerPassphrase: passphrase})
+		authSrv := auth.NewServer(auth.Config{
+			Issuer:          issuer,
+			OwnerPassphrase: passphrase,
+			ClientsFile:     filepath.Join(dir, "oauth-clients.json"),
+		})
 		authSrv.RegisterRoutes(mux)
 		mcpHandler = authSrv.RequireBearer(mcpServer)
 		// The viz UI is browser-facing, not an MCP client, so it can't carry a
