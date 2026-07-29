@@ -45,7 +45,6 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${{ github.ref_name }}"
-          VERSION_NUM="${VERSION#v}"
           SHA_DARWIN_ARM64=$(shasum -a 256 oh-my-graph_darwin_arm64.tar.gz | cut -d' ' -f1)
           SHA_DARWIN_AMD64=$(shasum -a 256 oh-my-graph_darwin_amd64.tar.gz | cut -d' ' -f1)
           SHA_LINUX_ARM64=$(shasum -a 256 oh-my-graph_linux_arm64.tar.gz | cut -d' ' -f1)
@@ -55,8 +54,12 @@ jobs:
           cd tap
           git checkout -b oh-my-graph-${VERSION}
 
+          # No explicit `version` field in the formula -- brew audit flags that as
+          # redundant when it's trivially inferable from the url (which is the case
+          # here). Bump the version baked directly into each release URL instead.
           sed -i \
-            -e "s/version \".*\"/version \"${VERSION_NUM}\"/" \
+            -E \
+            -e "s#(releases/download/)v[0-9]+\.[0-9]+\.[0-9]+(/oh-my-graph_)#\1${VERSION}\2#g" \
             -e "s/sha256 \".*\" # darwin_arm64/sha256 \"${SHA_DARWIN_ARM64}\" # darwin_arm64/" \
             -e "s/sha256 \".*\" # darwin_amd64/sha256 \"${SHA_DARWIN_AMD64}\" # darwin_amd64/" \
             -e "s/sha256 \".*\" # linux_arm64/sha256 \"${SHA_LINUX_ARM64}\" # linux_arm64/" \
