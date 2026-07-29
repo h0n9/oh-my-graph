@@ -395,6 +395,14 @@ sprite url update --auth public -s oh-my-graph
 
 Then just add `https://<sprite>-<org>.sprites.app/omg-mcp` as the connector URL in Claude or ChatGPT — no header, no client ID, no client secret. The client self-registers via DCR, your browser prompts once for the passphrase, and it's authorized from then on (until the server restarts, since all client/token state is in-memory).
 
+**Claude Code** (native Streamable HTTP MCP, no bridge needed):
+
+```bash
+claude mcp add --transport http oh-my-graph https://<sprite>-<org>.sprites.app/omg-mcp
+```
+
+No `--header` this time — Claude Code follows the same discovery-and-DCR dance: it hits the URL, gets a 401 pointing it at the protected-resource metadata, self-registers, and opens a browser for the one-time passphrase.
+
 ## Development
 
 ```bash
