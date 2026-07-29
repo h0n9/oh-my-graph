@@ -5,8 +5,12 @@
 // DCR registration is unauthenticated by spec, so the passphrase (not
 // registration) is the real access control.
 //
-// All state is in-memory: a process restart wipes every client, code, and
-// token, forcing connected clients to silently re-authenticate.
+// Codes and tokens are in-memory only: a process restart forces every
+// connected client to silently re-authenticate. DCR client registrations are
+// optionally persisted to disk (Config.ClientsFile) since clients treat
+// registration as a durable, one-time bootstrap step and have no way to
+// recover from their client_id becoming unknown -- unlike token expiry,
+// which they're built to handle gracefully.
 package auth
 
 import (
@@ -19,6 +23,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +41,7 @@ const (
 type Config struct {
 	Issuer          string // public base URL, e.g. https://oh-my-graph-h0n9.sprites.app
 	OwnerPassphrase string
+	ClientsFile     string // optional; persists DCR client registrations across restarts
 }
 
 type client struct {
@@ -70,6 +77,7 @@ type refreshToken struct {
 type Server struct {
 	issuer          string
 	ownerPassphrase string
+	clientsFile     string
 	authorizeTmpl   *template.Template
 
 	mu            sync.Mutex
@@ -80,14 +88,70 @@ type Server struct {
 }
 
 func NewServer(cfg Config) *Server {
-	return &Server{
+	s := &Server{
 		issuer:          strings.TrimRight(cfg.Issuer, "/"),
 		ownerPassphrase: cfg.OwnerPassphrase,
+		clientsFile:     cfg.ClientsFile,
 		authorizeTmpl:   template.Must(template.New("authorize").Parse(authorizeHTML)),
 		clients:         make(map[string]*client),
 		codes:           make(map[string]*authCode),
 		tokens:          make(map[string]*accessToken),
 		refreshTokens:   make(map[string]*refreshToken),
+	}
+	s.loadClients()
+	return s
+}
+
+// loadClients best-effort restores DCR client registrations from disk so a
+// restart doesn't orphan already-connected clients (see package doc). A
+// missing or unreadable file just starts with an empty registry -- this is a
+// convenience cache, not a source of truth clients can't function without.
+func (s *Server) loadClients() {
+	if s.clientsFile == "" {
+		return
+	}
+	data, err := os.ReadFile(s.clientsFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("oh-my-graph/auth: loadClients: %v", err)
+		}
+		return
+	}
+	var clients map[string]*client
+	if err := json.Unmarshal(data, &clients); err != nil {
+		log.Printf("oh-my-graph/auth: loadClients: parse %s: %v", s.clientsFile, err)
+		return
+	}
+	s.clients = clients
+	log.Printf("oh-my-graph/auth: loaded %d client registration(s) from %s", len(clients), s.clientsFile)
+}
+
+// persistClients writes the current client registry to disk. Best-effort:
+// logs on failure but never fails the caller's request over it, since the
+// in-memory registry remains authoritative for the life of this process.
+func (s *Server) persistClients() {
+	if s.clientsFile == "" {
+		return
+	}
+	s.mu.Lock()
+	data, err := json.MarshalIndent(s.clients, "", "  ")
+	s.mu.Unlock()
+	if err != nil {
+		log.Printf("oh-my-graph/auth: persistClients: marshal: %v", err)
+		return
+	}
+
+	tmp := s.clientsFile + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(s.clientsFile), 0o700); err != nil {
+		log.Printf("oh-my-graph/auth: persistClients: mkdir: %v", err)
+		return
+	}
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("oh-my-graph/auth: persistClients: write: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, s.clientsFile); err != nil {
+		log.Printf("oh-my-graph/auth: persistClients: rename: %v", err)
 	}
 }
 
@@ -247,6 +311,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.clients[clientID] = c
 	s.mu.Unlock()
+	s.persistClients()
 
 	log.Printf("oh-my-graph/auth: register: issued client_id=%s auth_method=%s", clientID, authMethod)
 	writeJSON(w, http.StatusCreated, resp)
