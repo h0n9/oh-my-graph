@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/h0n9/oh-my-graph/internal/auth"
 	"github.com/h0n9/oh-my-graph/internal/graph"
 	"github.com/h0n9/oh-my-graph/internal/mcp"
 	"github.com/h0n9/oh-my-graph/internal/viz"
@@ -28,6 +29,7 @@ func main() {
 
 	port := flag.Int("port", 7780, "HTTP listen port")
 	data := flag.String("data", "", "data directory (default: ~/.oh-my-graph)")
+	authEnabled := flag.Bool("auth", false, "require owner auth (OAuth 2.1 DCR+PKCE bearer on /mcp and /omg-mcp, HTTP Basic on the viz UI) using a shared passphrase; reads OMG_ISSUER and OMG_OWNER_PASSPHRASE")
 	flag.Parse()
 
 	dir := resolveDir(*data)
@@ -35,16 +37,34 @@ func main() {
 
 	mux := http.NewServeMux()
 	mcpServer := mcp.NewServer(mgr)
-	mux.Handle("/mcp", mcpServer)
+
+	var mcpHandler http.Handler = mcpServer
+	var vizHandler http.Handler = viz.NewHandler(mgr)
+	if *authEnabled {
+		issuer := os.Getenv("OMG_ISSUER")
+		passphrase := os.Getenv("OMG_OWNER_PASSPHRASE")
+		if issuer == "" || passphrase == "" {
+			log.Fatal("oh-my-graph: --auth requires OMG_ISSUER and OMG_OWNER_PASSPHRASE to be set")
+		}
+		authSrv := auth.NewServer(auth.Config{Issuer: issuer, OwnerPassphrase: passphrase})
+		authSrv.RegisterRoutes(mux)
+		mcpHandler = authSrv.RequireBearer(mcpServer)
+		// The viz UI is browser-facing, not an MCP client, so it can't carry a
+		// Bearer header on plain navigation — gate it with Basic Auth instead,
+		// using the same owner passphrase.
+		vizHandler = authSrv.RequireOwnerBasicAuth(vizHandler)
+	}
+
+	mux.Handle("/mcp", mcpHandler)
 	// Some hosts (e.g. Sprites' public gateway) reserve "/mcp" for their own
 	// control-plane MCP server; expose the same handler under an alias so
 	// oh-my-graph's MCP endpoint is still reachable there.
-	mux.Handle("/omg-mcp", mcpServer)
+	mux.Handle("/omg-mcp", mcpHandler)
 	mux.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"version":%q}`, Version)
 	})
-	mux.Handle("/", viz.NewHandler(mgr))
+	mux.Handle("/", vizHandler)
 
 	httpSrv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *port),
