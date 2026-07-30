@@ -83,6 +83,7 @@
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
+    touch-action: none;
   }
   #canvas.dragging { cursor: grabbing; }
 
@@ -502,9 +503,10 @@ function createNodeEl(n) {
   });
 
   // drag
-  g.addEventListener('mousedown', ev => {
+  g.addEventListener('pointerdown', ev => {
     if (ev.button !== 0) return;
     ev.stopPropagation();
+    g.setPointerCapture(ev.pointerId);
     n._pinned = true;
     n._vx = n._vy = 0;
     if (!sim) startSim();
@@ -517,11 +519,13 @@ function createNodeEl(n) {
       n._vx = n._vy = 0;
       n._pinned = false;
       if (!sim) startSim();
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      g.removeEventListener('pointermove', onMove);
+      g.removeEventListener('pointerup', onUp);
+      g.removeEventListener('pointercancel', onUp);
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    g.addEventListener('pointermove', onMove);
+    g.addEventListener('pointerup', onUp);
+    g.addEventListener('pointercancel', onUp);
   });
 }
 
@@ -694,27 +698,71 @@ function applyView() {
 }
 
 const canvas = document.getElementById('canvas');
-let isPanning = false, panStartX, panStartY, panStartVX, panStartVY;
+const activePointers = new Map(); // pointerId -> {x, y}, for pan (1) and pinch-zoom (2)
+let panLastX, panLastY;
+let pinchLastDist = null;
 
-canvas.addEventListener('mousedown', ev => {
+function pointerArray() {
+  return [...activePointers.values()];
+}
+
+canvas.addEventListener('pointerdown', ev => {
   if (ev.button !== 0) return;
-  isPanning = true;
-  panStartX = ev.clientX; panStartY = ev.clientY;
-  panStartVX = viewX;     panStartVY = viewY;
+  canvas.setPointerCapture(ev.pointerId);
+  activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
   canvas.classList.add('dragging');
+
+  if (activePointers.size === 1) {
+    panLastX = ev.clientX; panLastY = ev.clientY;
+  } else if (activePointers.size === 2) {
+    const [a, b] = pointerArray();
+    pinchLastDist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  }
 });
 
-window.addEventListener('mousemove', ev => {
-  if (!isPanning) return;
-  viewX = panStartVX + (ev.clientX - panStartX);
-  viewY = panStartVY + (ev.clientY - panStartY);
-  applyView();
+canvas.addEventListener('pointermove', ev => {
+  if (!activePointers.has(ev.pointerId)) return;
+  activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+  if (activePointers.size === 2) {
+    // pinch-zoom: scale by the change in finger-to-finger distance since the
+    // last move, anchored at the pinch midpoint (same anchoring math as the
+    // wheel handler below, just driven by pinch distance instead of deltaY)
+    const [a, b] = pointerArray();
+    const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const factor = dist / (pinchLastDist || dist);
+    pinchLastDist = dist;
+
+    const rect = canvas.getBoundingClientRect();
+    const mx = (a.x + b.x) / 2 - rect.left;
+    const my = (a.y + b.y) / 2 - rect.top;
+    viewX = mx - factor * (mx - viewX);
+    viewY = my - factor * (my - viewY);
+    viewScale *= factor;
+    applyView();
+  } else if (activePointers.size === 1) {
+    viewX += ev.clientX - panLastX;
+    viewY += ev.clientY - panLastY;
+    panLastX = ev.clientX; panLastY = ev.clientY;
+    applyView();
+  }
 });
 
-window.addEventListener('mouseup', () => {
-  isPanning = false;
-  canvas.classList.remove('dragging');
-});
+function endPointer(ev) {
+  if (!activePointers.has(ev.pointerId)) return;
+  activePointers.delete(ev.pointerId);
+  pinchLastDist = null;
+  if (activePointers.size === 0) {
+    canvas.classList.remove('dragging');
+  } else if (activePointers.size === 1) {
+    // dropped from a pinch back to one finger: re-baseline pan so it doesn't jump
+    const [p] = pointerArray();
+    panLastX = p.x; panLastY = p.y;
+  }
+}
+
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
 
 canvas.addEventListener('wheel', ev => {
   ev.preventDefault();
