@@ -1,203 +1,75 @@
 # oh-my-graph
 
-**Continue the project, not the conversation.**
+**Use the best AI for every task, not the same AI for every task.**
 
-Every AI session starts fresh. Your project never does.
+`oh-my-graph` gives AI agents a shared, persistent knowledge graph — implemented as an MCP server — so different assistants can collaborate through the same continuously updated context instead of starting from zero every session. See [Why oh-my-graph](#why-oh-my-graph) for the full idea, or [a concrete example](#concrete-example-a-day-with-oh-my-graph) of it in action.
 
-`oh-my-graph` gives AI agents persistent project understanding — implemented as a shared knowledge graph. Sessions are ephemeral; what agents learn about your project isn't.
+[![oh-my-graph visualization](https://github.com/h0n9/oh-my-graph/raw/main/assets/screenshot.png)](/h0n9/oh-my-graph/blob/main/assets/screenshot.png)
 
-![oh-my-graph visualization](assets/screenshot.png)
+## Installation
 
-## Why
-
-AI sessions are ephemeral. Every new session — a new terminal, a new agent, a new person on the team — starts from zero, no matter how much the last one figured out.
-
-Dropbox stores your files. Git stores the *evolution* of your project. Chat history stores a conversation. `oh-my-graph` stores the evolution of your project's *understanding* — the findings, decisions, and open questions multiple agents accumulate while working on it, so the next session picks up where the last one left off instead of re-discovering it.
-
-**In practice:**
-
-1. Session A (debugging a cache issue) discovers the root cause and writes a `finding` node: *"Redis cache hit rate dropped to 40% after v2.3 — key prefix change in config loader."*
-2. A week later, Session B (a different agent, or the same one in a fresh context) starts work on the same project. It calls `read_nodes_since` and immediately sees Session A's finding — no re-discovery, no re-explaining.
-3. Session B builds on it: writes a `decision` node fixing the prefix, linked back to the finding with a `resolves` edge.
-
-Concretely, that means:
-
-- **Persist findings** across sessions
-- **Share knowledge** between concurrent agents working on the same project
-- **Pass messages** between sessions using `message` nodes and `replies_to` edges
-- **Track reasoning** with `supports`, `contradicts`, `causes`, `deprecates` edges
-
-Under the hood, this is a graph of nodes and edges, persisted as an append-only WAL — see [Overview](#overview).
-
-## Quickstart
+### Local Machine
 
 **macOS** — installs as a launchd service that starts automatically on login:
 
-```bash
+```
 brew install h0n9/devops/oh-my-graph
 brew services start h0n9/devops/oh-my-graph
 ```
 
-If you'd like to share the graph across multiple Macs, refer to the [Syncing across devices](#syncing-across-devices) section.
+If you'd like to share the graph across multiple Macs, see [Syncing across devices](#syncing-across-devices).
 
 **Linux (or macOS without Homebrew)** — one-line installer, detects OS/arch and installs to `~/.local/bin` (override with `INSTALL_DIR`; pin a version with `VERSION=vX.Y.Z`):
 
-```bash
+```
 curl -fsSL https://raw.githubusercontent.com/h0n9/oh-my-graph/main/install.sh | sh
 ```
 
-Prefer not to run it on your own machine? See [Hosting on Sprites](#hosting-on-sprites) for running oh-my-graph as an always-on remote server instead.
+The server runs on port **7780** by default.
 
-The server runs on port **7780** by default. Point your MCP client at `http://localhost:7780/mcp`.
+### Server Deployment
 
-Check the following sections for instructions on connecting MCP client to `oh-my-graph`:
+Prefer not to run it on your own machine? Host `oh-my-graph` as an always-on remote MCP server on [Sprites](https://sprites.dev).
 
-- [Claude Desktop](#claude-desktop)
-- [Claude Code](#claude-code)
-- [Codex](#codex)
-
-## Overview
-
-`oh-my-graph` runs as an HTTP server that exposes a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) interface. Multiple AI agents connect to a single server instance and share knowledge organized into **topics**.
-
-Knowledge is stored as a graph of **nodes** (facts, concepts, questions, decisions, messages, ...) and **edges** (causal, epistemic, conversational relationships). The graph is persisted as an append-only JSONL file (`graph.jsonl`) per topic — like a write-ahead log.
+**Setup:**
 
 ```
-~/.oh-my-graph/
-├── life/
-│   └── graph.jsonl
-├── project-x/
-│   └── graph.jsonl
-└── comms/
-    └── graph.jsonl
+curl -fsSL https://sprites.dev/install.sh | sh
+sprite org auth
+sprite create oh-my-graph
+sprite use oh-my-graph
 ```
 
-## Graph Visualization
+Install the release binary onto the sprite with the same installer used locally:
 
-Open **`http://localhost:7780/`** in your browser to explore the graph visually.
-
-- **Topic list** — `GET /` lists all topics with node and edge counts
-- **Force-directed graph** — `GET /graph?topic=<name>` renders a live interactive graph
-
-## Data Model
-
-### Node
-
-```json
-{
-  "node_id": "uuid-v4",
-  "type": "finding | concept | blocker | question | decision | artifact | entity | event | message",
-  "summary": "one-liner",
-  "description": "full markdown body",
-  "confidence": 0.92
-}
+```
+sprite exec -- bash -c "export INSTALL_DIR=/home/sprite; curl -fsSL https://raw.githubusercontent.com/h0n9/oh-my-graph/main/install.sh | sh"
 ```
 
-**Node types:**
+Register it as a persistent [service](https://docs.sprites.dev/concepts/services/), bound to the sprite's public port so it restarts across hibernation/reboot:
 
-| Type | Purpose |
-|------|---------|
-| `finding` | A discovered fact or observation |
-| `concept` | An abstract idea or principle |
-| `blocker` | Something preventing progress |
-| `question` | An open unknown |
-| `decision` | A made choice with rationale |
-| `artifact` | A produced item (file, PR, doc) |
-| `entity` | A real-world thing (person, system, service) |
-| `event` | Something that happened |
-| `message` | An inter-session message (see [Messaging](#messaging)) |
-
-### Edge
-
-```json
-{
-  "edge_id": "uuid-v4",
-  "type": "resolves | produces | blocks | causes | supports | contradicts | depends_on | part_of | references | replies_to | deprecates",
-  "from_node_id": "uuid-v4",
-  "to_node_id": "uuid-v4"
-}
+```
+sprite exec -- sprite-env services create oh-my-graph --cmd /home/sprite/oh-my-graph --args "--port,7780,--data,/home/sprite/.oh-my-graph" --http-port 7780
 ```
 
-**Edge types:**
+**Migrating existing data:** tar up your local data directory and upload it before starting the service:
 
-| Type | Meaning |
-|------|---------|
-| `resolves` | Solution → blocker |
-| `produces` | Process → artifact |
-| `blocks` | Blocker → target |
-| `causes` | Cause → effect |
-| `supports` | Evidence → claim |
-| `contradicts` | Counter-evidence → claim |
-| `depends_on` | A requires B |
-| `part_of` | A belongs to B |
-| `references` | A cites B |
-| `replies_to` | Message → message (threading) |
-| `deprecates` | New node supersedes old node |
-
-### Storage format (`graph.jsonl`)
-
-Each line is a WAL record:
-
-```json
-{"seq":1,"type":"node","ts":"2026-06-18T12:00:00Z","data":{"node_id":"550e8400-e29b-41d4-a716-446655440000","type":"finding","summary":"Redis cache hit rate dropped to 40% after v2.3 deploy","description":"After deploying v2.3, Redis cache hit rate fell from 85% to 40%. Root cause: key prefix change in the new config loader.","confidence":0.92}}
-{"seq":2,"type":"edge","ts":"2026-06-18T12:00:01Z","data":{"edge_id":"660e8400-e29b-41d4-a716-446655440001","type":"causes","from_node_id":"550e8400-e29b-41d4-a716-446655440000","to_node_id":"770e8400-e29b-41d4-a716-446655440002"}}
+```
+tar -czf data.tar.gz -C ~/.oh-my-graph .
+sprite exec --file "data.tar.gz:/home/sprite/data.tar.gz" -- bash -c "mkdir -p /home/sprite/.oh-my-graph && tar -xzf /home/sprite/data.tar.gz -C /home/sprite/.oh-my-graph && rm /home/sprite/data.tar.gz"
 ```
 
-- `seq` — monotonically increasing sequence number (the cursor)
-- `ts` — wall-clock time of append (RFC 3339)
-- Records are **never modified or deleted** — use a `deprecates` edge instead
+## Connecting AI Clients
 
-## MCP Tools
-
-| Tool | Signature | Returns |
-|------|-----------|---------|
-| `list_topics` | `()` | `[]string` |
-| `get_topic` | `(topic)` | `{last_cursor, node_count, edge_count}` |
-| `read_nodes_since` | `(topic, cursor?, types?)` | `[]{node_id, type, summary, seq}` |
-| `read_node` | `(topic, node_id)` | full node + all edges (in & out) |
-| `neighbors` | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
-| `write` | `(topic, nodes[], edges[])` | `{cursor}` |
-
-`cursor` defaults to `0` — read from the beginning. `types` defaults to `["finding"]` when omitted; pass `types:["*"]` to return every node type, or a specific list (e.g. `["decision"]`) to narrow further.
-
-`neighbors` does a BFS traversal from `node_id` out to `depth` hops (1–3, default 1), following `direction` (`outgoing`|`incoming`|`both`, default `both`) and filtering by `edge_types` (default `["*"]`, all types — a separate axis from `read_nodes_since`'s node-type filter). Returns summary-level neighbors only (no `description`) capped at `limit` (default 50, max 200); `truncated` is `true` if the reachable set exceeded `limit`. Use it to expand outward from an anchor node found via `read_nodes_since` before spending a `read_node` call on the short list.
-
-## Messaging
-
-Agents communicate asynchronously via `message` nodes in a shared topic:
-
-1. **Session A** writes a `message` node to topic `"comms"`
-2. **Session B** polls `read_nodes_since("comms", last_cursor, types:["message"])`, sees the message — note the explicit `types` here, since `read_nodes_since` only returns `finding` nodes by default
-3. **Session B** replies with a new `message` node + `replies_to` edge pointing back
-
-No extra infrastructure needed — the graph is the message bus.
-
-## Usage
-
-### Start the server
-
-```bash
-oh-my-graph                  # listens on :7780, data at ~/.oh-my-graph
-oh-my-graph --port 8080      # custom port
-oh-my-graph --data /var/omg  # custom data directory
-```
-
-The server loads each topic graph into memory on first access and flushes writes to disk asynchronously. Multiple agents may connect concurrently.
-
-### Connect via MCP
-
-Point your MCP client at `http://localhost:7780/mcp` (Streamable HTTP transport, JSON-RPC 2.0).
+Point your MCP client at `http://localhost:7780/mcp` (Streamable HTTP transport, JSON-RPC 2.0) for a local install, or at your Sprite's public URL for a remote one.
 
 ### Claude Desktop
 
 Claude Desktop only supports stdio-based MCP servers. Use [`mcp-remote`](https://github.com/geelen/mcp-remote) as a bridge to the HTTP server.
 
-Add the following to your Claude Desktop config file:
+Add the following to your Claude Desktop config file (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows: `%APPDATA%\Claude\claude_desktop_config.json`):
 
-- **macOS:** `~/Library/Application\ Support/Claude/claude_desktop_config.json`
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
+```
 {
   "mcpServers": {
     "oh-my-graph": {
@@ -212,25 +84,21 @@ Add the following to your Claude Desktop config file:
 }
 ```
 
-> The port above (`7780`) is the default. If you started the server with a different port, update the URL accordingly.
-
-Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `neighbors`, `write`) will appear automatically in your Claude sessions.
+Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `neighbors`, `write`) will appear automatically.
 
 ### Claude Code
 
 Claude Code natively supports Streamable HTTP MCP — no bridge required.
 
-**Via CLI** (writes to `~/.claude.json` at user/global scope, so the server is available from every project):
+**Via CLI** (global scope, so the server is available from every project):
 
-```bash
+```
 claude mcp add oh-my-graph --transport http --scope user http://localhost:7780/mcp
 ```
 
-> Omitting `--scope user` defaults to **local** scope — the server is only visible from the directory you ran the command in. Since `oh-my-graph` runs as a permanent background service, global scope is almost always what you want.
-
 **Manually** — add to `~/.claude.json` (global) or `.claude/settings.json` (project):
 
-```json
+```
 {
   "mcpServers": {
     "oh-my-graph": {
@@ -243,7 +111,7 @@ claude mcp add oh-my-graph --transport http --scope user http://localhost:7780/m
 
 **Tip:** Add the following to your `~/.claude/CLAUDE.md` so Claude automatically loads graph context at the start of every session:
 
-````markdown
+```
 ## oh-my-graph Knowledge Graph
 
 At the start of every session, connect to the `oh-my-graph` MCP server:
@@ -254,50 +122,239 @@ At the start of every session, connect to the `oh-my-graph` MCP server:
 4. When a node from that skim looks relevant, call `neighbors(<topic>, node_id, depth: 2)` to pull in its graph-local context before deciding whether to spend a full `read_node` call on it.
 
 During the session, call `write` frequently to persist findings, decisions, and artifacts. Link related nodes with edges to preserve reasoning chains.
-````
+```
 
 ### Codex
 
 Add to `~/.codex/config.yaml`:
 
-```yaml
+```
 mcp_servers:
   - name: oh-my-graph
     type: http
     url: http://localhost:7780/mcp
 ```
 
-Codex will surface the `list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `neighbors`, and `write` tools in every session.
+### Connecting to a remote (Sprites) server
+
+`oh-my-graph` ships with **no auth by default** — access control comes from exactly one of the two options below.
+
+**Option A — Sprite gateway auth (default).** Leave the sprite's URL at its default `sprite` auth mode and run without `--auth`. Any client with a valid Sprites org bearer token can connect:
+
+```
+curl -H "Authorization: Bearer $SPRITE_TOKEN" https://<sprite>-<org>.sprites.app/omg-mcp
+```
+
+This doesn't work for clients with no header/static-credential field — notably ChatGPT. Use Option B for those.
+
+**Option B — OMG OAuth (opt-in).** Run with `--auth` and set `OMG_ISSUER` (the server's public base URL) and `OMG_OWNER_PASSPHRASE` (a shared secret). This enables a full OAuth 2.1 Authorization Code + PKCE flow with Dynamic Client Registration, gated by the passphrase:
+
+```
+sprite exec -- sprite-env services create oh-my-graph --cmd /home/sprite/oh-my-graph --args "--port,7780,--data,/home/sprite/.oh-my-graph,--auth" --env "OMG_ISSUER=https://<sprite>-<org>.sprites.app,OMG_OWNER_PASSPHRASE=<your-passphrase>" --http-port 7780
+sprite url update --auth public -s oh-my-graph
+```
+
+Then just add `https://<sprite>-<org>.sprites.app/omg-mcp` as the connector URL in Claude or ChatGPT — no header, no client ID or secret needed. The client self-registers via DCR and your browser prompts once for the passphrase.
+
+> **Note:** Sprites' own gateway reserves `/mcp` on every `*.sprites.app` URL for its own control-plane server, so `oh-my-graph` also serves its MCP handler at `/omg-mcp` — use that path when connecting through a sprite's public URL.
+
+## Overview
+
+### Why oh-my-graph
+
+Modern AI assistants are powerful, but every conversation is an island. The moment you switch from ChatGPT to Claude to any other assistant, the context you built disappears — ideas, decisions, and architecture choices have to be re-explained from scratch.
+
+`oh-my-graph` solves this by separating **knowledge** from **conversations**, giving different assistants a shared, persistent layer to collaborate through instead of starting from zero every session.
+
+Every new session — a new terminal, a new agent, a new person on the team — normally starts from zero, no matter how much a previous session figured out. Dropbox stores your files. Git stores the evolution of your project. Chat history stores a conversation. `oh-my-graph` stores the evolution of your project's *understanding* — the findings, decisions, and open questions multiple agents accumulate while working on it, so the next session picks up where the last one left off.
+
+Concretely, that means:
+
+- **Persist findings** across sessions
+- **Share knowledge** between concurrent agents working on the same project
+- **Pass messages** between sessions using `message` nodes and `replies_to` edges
+- **Track reasoning** with `supports`, `contradicts`, `causes`, `deprecates` edges
+
+### Concrete Example: A Day with `oh-my-graph`
+
+**Scenario: Turning a walking conversation into an implemented feature**
+
+A developer has an idea while walking outside.
+
+**Step 1 — Capture ideas naturally with ChatGPT Voice**
+
+While walking, the developer opens ChatGPT Voice and talks naturally: *"I think AI assistants are becoming more powerful, but the biggest problem is that my knowledge is scattered across different conversations. I want a way to keep my ideas and context available everywhere."*
+
+Instead of writing notes manually, the developer explores the idea conversationally. ChatGPT helps by asking questions, discovering missing perspectives, structuring the idea, identifying use cases, and summarizing decisions. The important insights are stored in `oh-my-graph`:
+
+- **Problem:** "AI conversations are isolated across platforms."
+- **Insight:** "Knowledge should exist independently from any AI assistant."
+- **Decision:** "`oh-my-graph` should become a shared context layer."
+
+**Step 2 — Continue implementation with Claude Code**
+
+Later, back at the desk, the developer opens Claude Code. It doesn't need to be told everything again — it reads the existing graph context: the original problem, previous discussions, architecture decisions, technical constraints, implementation ideas. It proposes a plan: *"Based on the graph context, we should implement a new MCP integration that allows AI clients to access shared knowledge nodes."* The developer reviews it, says "Yes, implement it," and Claude Code writes the code.
+
+**Step 3 — Use another AI for communication and marketing**
+
+After implementation, the developer brings in an assistant that's stronger at communication. It reads the same graph context and helps with README improvements, blog posts, product positioning, documentation, and user guides — understanding the original vision because the context was already preserved.
+
+**The result**
+
+The developer is no longer switching between disconnected AI conversations:
+
+- **ChatGPT Voice** → explores ideas
+- **`oh-my-graph`** → preserves knowledge
+- **Claude Code** → builds the solution
+- **Other AI assistants** → communicate and expand the idea
+
+Each AI does what it does best. The user's knowledge remains continuous — *your AI assistants may change, but your knowledge stays with you.*
+
+### Architecture
+
+`oh-my-graph` runs as an HTTP server exposing a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) interface. Multiple AI agents connect to a single server instance and share knowledge organized into **topics**.
+
+Knowledge is stored as a graph of **nodes** (facts, concepts, questions, decisions, messages, ...) and **edges** (causal, epistemic, conversational relationships). The graph is persisted as an append-only JSONL file (`graph.jsonl`) per topic — like a write-ahead log:
+
+```
+~/.oh-my-graph/
+├── life/
+│   └── graph.jsonl
+├── project-x/
+│   └── graph.jsonl
+└── comms/
+    └── graph.jsonl
+```
+
+### Graph Visualization
+
+Open **`http://localhost:7780/`** in your browser to explore the graph visually — the topic list shows node/edge counts, and `/graph?topic=<name>` renders a live interactive force-directed graph.
+
+## Data Model
+
+### Node
+
+```
+{
+  "node_id": "uuid-v4",
+  "type": "finding | concept | blocker | question | decision | artifact | entity | event | message",
+  "summary": "one-liner",
+  "description": "full markdown body",
+  "confidence": 0.92
+}
+```
+
+| Type       | Purpose                                                |
+| ---------- | ------------------------------------------------------ |
+| `finding`  | A discovered fact or observation                       |
+| `concept`  | An abstract idea or principle                          |
+| `blocker`  | Something preventing progress                          |
+| `question` | An open unknown                                        |
+| `decision` | A made choice with rationale                           |
+| `artifact` | A produced item (file, PR, doc)                        |
+| `entity`   | A real-world thing (person, system, service)           |
+| `event`    | Something that happened                                |
+| `message`  | An inter-session message (see [Messaging](#messaging)) |
+
+### Edge
+
+```
+{
+  "edge_id": "uuid-v4",
+  "type": "resolves | produces | blocks | causes | supports | contradicts | depends_on | part_of | references | replies_to | deprecates",
+  "from_node_id": "uuid-v4",
+  "to_node_id": "uuid-v4"
+}
+```
+
+| Type          | Meaning                       |
+| ------------- | ----------------------------- |
+| `resolves`    | Solution → blocker            |
+| `produces`    | Process → artifact            |
+| `blocks`      | Blocker → target              |
+| `causes`      | Cause → effect                |
+| `supports`    | Evidence → claim              |
+| `contradicts` | Counter-evidence → claim      |
+| `depends_on`  | A requires B                  |
+| `part_of`     | A belongs to B                |
+| `references`  | A cites B                     |
+| `replies_to`  | Message → message (threading) |
+| `deprecates`  | New node supersedes old node  |
+
+### Storage format (`graph.jsonl`)
+
+Each line is a WAL record:
+
+```
+{"seq":1,"type":"node","ts":"2026-06-18T12:00:00Z","data":{"node_id":"550e8400-e29b-41d4-a716-446655440000","type":"finding","summary":"Redis cache hit rate dropped to 40% after v2.3 deploy","description":"After deploying v2.3, Redis cache hit rate fell from 85% to 40%. Root cause: key prefix change in the new config loader.","confidence":0.92}}
+{"seq":2,"type":"edge","ts":"2026-06-18T12:00:01Z","data":{"edge_id":"660e8400-e29b-41d4-a716-446655440001","type":"causes","from_node_id":"550e8400-e29b-41d4-a716-446655440000","to_node_id":"770e8400-e29b-41d4-a716-446655440002"}}
+```
+
+- `seq` — monotonically increasing sequence number (the cursor)
+- `ts` — wall-clock time of append (RFC 3339)
+- Records are **never modified or deleted** — use a `deprecates` edge instead
+
+## MCP Tools
+
+| Tool               | Signature                                                   | Returns                                                                          |
+| ------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `list_topics`      | `()`                                                        | `[]string`                                                                       |
+| `get_topic`        | `(topic)`                                                   | `{last_cursor, node_count, edge_count}`                                          |
+| `read_nodes_since` | `(topic, cursor?, types?)`                                  | `[]{node_id, type, summary, seq}`                                                |
+| `read_node`        | `(topic, node_id)`                                          | full node + all edges (in & out)                                                 |
+| `neighbors`        | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
+| `write`            | `(topic, nodes[], edges[])`                                 | `{cursor}`                                                                       |
+
+`cursor` defaults to `0`. `types` defaults to `["finding"]` when omitted; pass `types:["*"]` for every node type, or a specific list to narrow further.
+
+`neighbors` does a BFS traversal from `node_id` out to `depth` hops (1–3, default 1), following `direction` (default `both`) and filtering by `edge_types` (default `["*"]`). Returns summary-level neighbors capped at `limit` (default 50, max 200); `truncated` is `true` if the reachable set exceeded `limit`.
+
+## Messaging
+
+Agents communicate asynchronously via `message` nodes in a shared topic:
+
+1. **Session A** writes a `message` node to topic `"comms"`
+2. **Session B** polls `read_nodes_since("comms", last_cursor, types:["message"])` and sees the message
+3. **Session B** replies with a new `message` node + `replies_to` edge pointing back
+
+No extra infrastructure needed — the graph is the message bus.
+
+## Usage
+
+Start the server:
+
+```
+oh-my-graph                  # listens on :7780, data at ~/.oh-my-graph
+oh-my-graph --port 8080      # custom port
+oh-my-graph --data /var/omg  # custom data directory
+```
+
+The server loads each topic graph into memory on first access and flushes writes to disk asynchronously. Multiple agents may connect concurrently.
 
 ## Syncing across devices
 
-Symlinking the data directory into iCloud Drive lets you share your graph across multiple Macs and browse it on iPhone. The service reads and writes through the symlink transparently.
+Symlinking the data directory into iCloud Drive lets you share your graph across multiple Macs and browse it on iPhone.
 
 **Fresh install (no existing data):**
 
-```bash
+```
 mkdir -p "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph"
 ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph" ~/.oh-my-graph
 brew services start h0n9/devops/oh-my-graph
 ```
 
-**Existing data at `~/.oh-my-graph`:**
+**Existing data at `~/.oh-my-graph`** — back up first (`cp -r ~/.oh-my-graph ~/.oh-my-graph.bak`), then:
 
-> **Back up your data before migrating.** `mv` is destructive — if something goes wrong mid-way, you could lose data.
-> ```bash
-> cp -r ~/.oh-my-graph ~/.oh-my-graph.bak
-> ```
-
-```bash
+```
 brew services stop h0n9/devops/oh-my-graph
 mv ~/.oh-my-graph "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph"
 ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph" ~/.oh-my-graph
 brew services start h0n9/devops/oh-my-graph
 ```
 
-On each additional Mac, run the following commands — the symlink will point to the same iCloud directory already populated by the first machine.
+On each additional Mac:
 
-```bash
+```
 brew services stop h0n9/devops/oh-my-graph
 rm -rf ~/.oh-my-graph
 ln -s "$HOME/Library/Mobile Documents/com~apple~CloudDocs/oh-my-graph" ~/.oh-my-graph
@@ -306,106 +363,9 @@ brew services start h0n9/devops/oh-my-graph
 
 > Make sure only one machine runs the server at a time to avoid concurrent writes to the same file.
 
-## Hosting on Sprites
-
-Run oh-my-graph as an always-on remote MCP server on [Sprites](https://sprites.dev) instead of on your local machine.
-
-### Setup
-
-```bash
-curl -fsSL https://sprites.dev/install.sh | sh
-sprite org auth
-sprite create oh-my-graph
-sprite use oh-my-graph
-```
-
-Install the release binary onto the sprite with the same installer used above:
-
-```bash
-sprite exec -- bash -c "export INSTALL_DIR=/home/sprite; curl -fsSL https://raw.githubusercontent.com/h0n9/oh-my-graph/main/install.sh | sh"
-```
-
-Register it as a persistent [service](https://docs.sprites.dev/concepts/services/), bound to the sprite's public port so it restarts across hibernation/reboot:
-
-```bash
-sprite exec -- sprite-env services create oh-my-graph --cmd /home/sprite/oh-my-graph --args "--port,7780,--data,/home/sprite/.oh-my-graph" --http-port 7780
-```
-
-**Migrating existing data:** tar up your local data directory and upload it before starting the service:
-
-```bash
-tar -czf data.tar.gz -C ~/.oh-my-graph .
-sprite exec --file "data.tar.gz:/home/sprite/data.tar.gz" -- bash -c "mkdir -p /home/sprite/.oh-my-graph && tar -xzf /home/sprite/data.tar.gz -C /home/sprite/.oh-my-graph && rm /home/sprite/data.tar.gz"
-```
-
-### Connecting
-
-> **`/mcp` vs `/omg-mcp`:** Sprites' own gateway reserves the literal path `/mcp` on every `*.sprites.app` URL for its own hosted control-plane MCP server ([docs](https://docs.sprites.dev/integrations/remote-mcp/)), which collides with oh-my-graph's endpoint. For this reason oh-my-graph serves its MCP handler at **both** `/mcp` and `/omg-mcp` (identical, same handler) — use `/omg-mcp` when connecting through a sprite's public URL; `/mcp` still works for local/internal use (e.g. `sprite exec -- curl localhost:7780/mcp`).
-
-oh-my-graph itself ships with **no auth by default** — `--auth` is off unless you pass it. That means access control comes from exactly one of the two layers below; pick one.
-
-#### Option A — Sprite gateway auth (default)
-
-Leave the sprite's URL at its default `sprite` auth mode (org-private) and run oh-my-graph without `--auth`. Anything that can present a valid Sprites org bearer token can reach the endpoint, so keep the URL private — the app itself does no authentication in this mode.
-
-```bash
-curl -H "Authorization: Bearer $SPRITE_TOKEN" https://<sprite>-<org>.sprites.app/omg-mcp
-```
-
-Get a token at `sprites.dev/account`.
-
-**Claude Desktop** (stdio-only — bridge via [`mcp-remote`](https://github.com/geelen/mcp-remote)):
-
-```json
-{
-  "mcpServers": {
-    "oh-my-graph": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote",
-        "https://<sprite>-<org>.sprites.app/omg-mcp",
-        "--header",
-        "Authorization:${SPRITE_AUTH}"
-      ],
-      "env": {
-        "SPRITE_AUTH": "Bearer <your-sprites-org-token>"
-      }
-    }
-  }
-}
-```
-
-**Claude Code** (native Streamable HTTP MCP, no bridge needed):
-
-```bash
-claude mcp add --transport http oh-my-graph https://<sprite>-<org>.sprites.app/omg-mcp --header "Authorization: Bearer \${SPRITE_TOKEN}"
-```
-
-This option doesn't work for clients that can't send custom headers or a static bearer token — notably ChatGPT, which has no such field. Use Option B for those.
-
-#### Option B — OMG OAuth (opt-in, for clients with no static-credential field)
-
-Run oh-my-graph with `--auth` and set two env vars: `OMG_ISSUER` (the server's own public base URL) and `OMG_OWNER_PASSPHRASE` (a shared secret only you know). This turns on a full OAuth 2.1 Authorization Code + PKCE flow with RFC 7591 Dynamic Client Registration and RFC 9728/8414 discovery metadata — the same "MCP OAuth" flow the MCP Authorization spec describes — gated by the passphrase at `/authorize`. Since the app is now the access-control boundary, set the sprite's URL to `public` so the (redundant, and incompatible with DCR clients) Sprites gateway token isn't also required:
-
-```bash
-sprite exec -- sprite-env services create oh-my-graph --cmd /home/sprite/oh-my-graph --args "--port,7780,--data,/home/sprite/.oh-my-graph,--auth" --env "OMG_ISSUER=https://<sprite>-<org>.sprites.app,OMG_OWNER_PASSPHRASE=<your-passphrase>" --http-port 7780
-sprite url update --auth public -s oh-my-graph
-```
-
-Then just add `https://<sprite>-<org>.sprites.app/omg-mcp` as the connector URL in Claude or ChatGPT — no header, no client ID, no client secret. The client self-registers via DCR, your browser prompts once for the passphrase, and it's authorized from then on (until the server restarts, since all client/token state is in-memory).
-
-**Claude Code** (native Streamable HTTP MCP, no bridge needed):
-
-```bash
-claude mcp add --transport http oh-my-graph https://<sprite>-<org>.sprites.app/omg-mcp
-```
-
-No `--header` this time — Claude Code follows the same discovery-and-DCR dance: it hits the URL, gets a 401 pointing it at the protected-resource metadata, self-registers, and opens a browser for the one-time passphrase.
-
 ## Development
 
-```bash
+```
 git clone https://github.com/h0n9/oh-my-graph
 cd oh-my-graph
 make run    # go run — starts the server on port 7780
@@ -417,42 +377,38 @@ Requires Go 1.26+. No external dependencies.
 
 ## Benchmarks
 
-Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -bench=. -run=^$ -benchmem`):
+Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -bench=. -run=^$ -benchmem`).
 
 ### Storage layer (`internal/graph`)
 
-| Benchmark | Scenario | Time/op | Memory/op | Allocs/op |
-|-----------|----------|---------|-----------|-----------|
-| `BenchmarkNodesSinceRareTypeFilter` | `read_nodes_since` filtered to a single type, with 1 matching node buried behind 50,000 nodes of another type | 57.5 ns | 64 B | 1 |
-| `BenchmarkNodesSinceWildcard` | `read_nodes_since` with no type filter, over 50,000 nodes | 348 ns | 581 B | 1 |
-| `BenchmarkNodesSinceMultiType` | `read_nodes_since` merging 3 types, 10,000 nodes each | 7.48 µs | 16.0 KB | 9 |
-| `BenchmarkGetNode` | `read_node` on a node with 2 edges, in a 10,000-node graph | 112 ns | 48 B | 2 |
-| `BenchmarkNeighborsChain` | `neighbors` — depth 2, both directions, mid-chain anchor in a 10,000-node chain | 1.68 µs | 6.8 KB | 11 |
-| `BenchmarkNeighborsHub` | `neighbors` — depth 1 from a hub node with 10,000 outgoing edges, limit 50 (bounded by the internal per-node edge cap, not degree) | 10.7 µs | 24.9 KB | 23 |
-| `BenchmarkWriteBatch` | `write` — single-node batch (validate + in-memory commit + async WAL append) | 7.34 µs | 1.6 KB | 11 |
-| `BenchmarkWriteBatchLarge` | `write` — 50-node batch | 83.9 µs | 68.2 KB | 362 |
-| `BenchmarkWriteParallel` | `write` — single-node batches from concurrent callers | 7.48 µs | 1.2 KB | 10 |
-| `BenchmarkSnapshot` | full graph snapshot (backs `/api/graph`), 10,000 nodes + 5,000 edges | 138 µs | 121 KB | 3 |
-| `BenchmarkTopicLoad` | cold start: opening a topic backed by an existing 20,000-node WAL file | 55.9 ms | 24.0 MB | 320,230 |
-
-`read_nodes_since` keeps a separate log per node type, so filtering by type costs O(log N) regardless of how rare the requested type is, instead of scanning every node to find matches. `neighbors` is a bounded BFS: it stops enqueueing the moment `limit` is reached rather than collecting then truncating, and caps how many edges of any single node it considers per hop — so cost stays O(limit × avg_degree) even against a degenerate hub node, as `BenchmarkNeighborsHub` shows. Cold-start topic load is the one operation that's still O(L) in total WAL history — everything else is O(1), O(log N), or bounded by the caller's own limit.
+| Benchmark                           | Scenario                                                                                                     | Time/op | Memory/op | Allocs/op |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------- | --------- | --------- |
+| `BenchmarkNodesSinceRareTypeFilter` | `read_nodes_since` filtered to a single type, with 1 matching node buried behind 50,000 nodes of another type | 57.5 ns | 64 B      | 1         |
+| `BenchmarkNodesSinceWildcard`       | `read_nodes_since` with no type filter, over 50,000 nodes                                                     | 348 ns  | 581 B     | 1         |
+| `BenchmarkNodesSinceMultiType`      | `read_nodes_since` merging 3 types, 10,000 nodes each                                                         | 7.48 µs | 16.0 KB   | 9         |
+| `BenchmarkGetNode`                  | `read_node` on a node with 2 edges, in a 10,000-node graph                                                    | 112 ns  | 48 B      | 2         |
+| `BenchmarkNeighborsChain`           | `neighbors` — depth 2, both directions, mid-chain anchor in a 10,000-node chain                               | 1.68 µs | 6.8 KB    | 11        |
+| `BenchmarkNeighborsHub`             | `neighbors` — depth 1 from a hub node with 10,000 outgoing edges, limit 50                                    | 10.7 µs | 24.9 KB   | 23        |
+| `BenchmarkWriteBatch`               | `write` — single-node batch                                                                                   | 7.34 µs | 1.6 KB    | 11        |
+| `BenchmarkWriteBatchLarge`          | `write` — 50-node batch                                                                                       | 83.9 µs | 68.2 KB   | 362       |
+| `BenchmarkWriteParallel`            | `write` — single-node batches from concurrent callers                                                         | 7.48 µs | 1.2 KB    | 10        |
+| `BenchmarkSnapshot`                 | full graph snapshot (backs `/api/graph`), 10,000 nodes + 5,000 edges                                          | 138 µs  | 121 KB    | 3         |
+| `BenchmarkTopicLoad`                | cold start: opening a topic backed by an existing 20,000-node WAL file                                        | 55.9 ms | 24.0 MB   | 320,230   |
 
 ### Protocol layer (`internal/mcp`) — full JSON-RPC round trip
 
-| Benchmark | Scenario | Time/op | Memory/op | Allocs/op |
-|-----------|----------|---------|-----------|-----------|
-| `BenchmarkWriteHandler` | `write` tool call — JSON args in, `Write`, JSON result out | 7.91 µs | 2.4 KB | 31 |
-| `BenchmarkReadNodesSinceHandler` | `read_nodes_since` tool call, default filter, over 1,000 seeded nodes | 17.7 µs | 18.3 KB | 11 |
-| `BenchmarkNeighborsHandler` | `neighbors` tool call — depth 2, limit 50, mid-chain anchor in a 1,000-node chain | 4.30 µs | 8.5 KB | 22 |
-
-These include JSON marshal/unmarshal overhead on top of the storage-layer cost above — closer to what an actual MCP client call pays end to end.
+| Benchmark                        | Scenario                                                                          | Time/op | Memory/op | Allocs/op |
+| --------------------------------- | ------------------------------------------------------------------------------------ | ------- | --------- | --------- |
+| `BenchmarkWriteHandler`          | `write` tool call — JSON args in, `Write`, JSON result out                        | 7.91 µs | 2.4 KB    | 31        |
+| `BenchmarkReadNodesSinceHandler` | `read_nodes_since` tool call, default filter, over 1,000 seeded nodes             | 17.7 µs | 18.3 KB   | 11        |
+| `BenchmarkNeighborsHandler`      | `neighbors` tool call — depth 2, limit 50, mid-chain anchor in a 1,000-node chain | 4.30 µs | 8.5 KB    | 22        |
 
 Reproduce locally:
 
-```bash
+```
 go test ./internal/graph/... ./internal/mcp/... -bench=. -run=^$ -benchmem
 ```
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE) for details.
+Apache 2.0 — see [LICENSE](https://github.com/h0n9/oh-my-graph/blob/main/LICENSE) for details.
