@@ -29,6 +29,9 @@ func NewHandler(mgr *graph.Manager) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if servePWAAsset(w, r) {
+		return
+	}
 	switch r.URL.Path {
 	case "/", "":
 		h.serveIndex(w, r)
@@ -36,6 +39,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, staticFS, "static/graph.html")
 	case "/api/graph":
 		h.serveGraphData(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// servePWAAsset serves the PWA manifest and icon files, or reports false if
+// the request path isn't one of them.
+func servePWAAsset(w http.ResponseWriter, r *http.Request) bool {
+	switch r.URL.Path {
 	case "/manifest.json":
 		w.Header().Set("Content-Type", "application/manifest+json")
 		http.ServeFileFS(w, r, staticFS, "static/manifest.json")
@@ -46,8 +58,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/apple-touch-icon.png":
 		http.ServeFileFS(w, r, staticFS, "static/apple-touch-icon.png")
 	default:
-		http.NotFound(w, r)
+		return false
 	}
+	return true
+}
+
+// PWAAssets returns a handler for the PWA manifest and icon files alone.
+// It's meant to be mounted outside of any Basic Auth wrapping applied to
+// the rest of the viz UI: Safari's "Add to Home Screen" flow fetches these
+// in the background without attaching interactively-entered credentials,
+// so gating them the same way the graph pages are gated silently breaks
+// the install icon. They carry no graph data -- just app name, theme
+// colors, and a generic icon -- so exposing them is safe.
+func PWAAssets() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !servePWAAsset(w, r) {
+			http.NotFound(w, r)
+		}
+	})
 }
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {

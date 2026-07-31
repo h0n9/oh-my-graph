@@ -68,6 +68,15 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"version":%q}`, Version)
 	})
+	// The PWA manifest/icons must stay reachable without auth even when
+	// --auth gates the rest of the viz UI (see viz.PWAAssets doc comment) --
+	// registered directly on mux so they win over "/" regardless of the
+	// Basic Auth wrapping below.
+	pwaAssets := viz.PWAAssets()
+	mux.Handle("/manifest.json", pwaAssets)
+	mux.Handle("/icon-192.png", pwaAssets)
+	mux.Handle("/icon-512.png", pwaAssets)
+	mux.Handle("/apple-touch-icon.png", pwaAssets)
 	mux.Handle("/", vizHandler)
 
 	httpSrv := &http.Server{
