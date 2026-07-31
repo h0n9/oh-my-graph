@@ -36,6 +36,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, staticFS, "static/graph.html")
 	case "/api/graph":
 		h.serveGraphData(w, r)
+	case "/manifest.json":
+		w.Header().Set("Content-Type", "application/manifest+json")
+		http.ServeFileFS(w, r, staticFS, "static/manifest.json")
+	case "/icon-192.png":
+		http.ServeFileFS(w, r, staticFS, "static/icon-192.png")
+	case "/icon-512.png":
+		http.ServeFileFS(w, r, staticFS, "static/icon-512.png")
+	case "/apple-touch-icon.png":
+		http.ServeFileFS(w, r, staticFS, "static/apple-touch-icon.png")
 	default:
 		http.NotFound(w, r)
 	}
