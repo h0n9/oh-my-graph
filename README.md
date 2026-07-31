@@ -29,9 +29,9 @@ The server runs on port **7780** by default.
 
 ### Server Deployment
 
-Prefer not to run it on your own machine? Host `oh-my-graph` as an always-on remote MCP server on [Sprites](https://sprites.dev).
+Prefer not to run it on your own machine? Host `oh-my-graph` as an always-on remote MCP server on any platform that can run the Go binary and expose a port — a VPS, a cloud VM, a container host, etc. The walkthrough below uses [Sprites](https://sprites.dev) as one concrete example; the same binary and flags work anywhere.
 
-**Setup:**
+**Example: deploying on Sprites**
 
 ```
 curl -fsSL https://sprites.dev/install.sh | sh
@@ -74,11 +74,11 @@ This turns on a full OAuth 2.1 Authorization Code + PKCE flow with Dynamic Clien
 
 **Recommendation:** treat any non-localhost binding as a public endpoint by default and require `--auth`, paired with standard network hygiene — HTTPS termination via reverse proxy, firewall rules limiting source IPs.
 
-See [Connecting AI Clients → Connecting to a remote (Sprites) server](#connecting-to-a-remote-sprites-server) for the Sprites walkthrough of this mechanism, plus a Sprites-only shortcut for clients that don't need it.
+See [Connecting AI Clients → Connecting to a remote server](#connecting-to-a-remote-server-sprites-example) for a worked walkthrough of this mechanism, plus a platform-specific shortcut for clients that don't need it.
 
 ## Connecting AI Clients
 
-Point your MCP client at `http://localhost:7780/mcp` (Streamable HTTP transport, JSON-RPC 2.0) for a local install, or at your Sprite's public URL for a remote one.
+Point your MCP client at `http://localhost:7780/mcp` (Streamable HTTP transport, JSON-RPC 2.0) for a local install, or at your remote server's public URL for a remote one.
 
 ### Claude Desktop
 
@@ -152,11 +152,11 @@ mcp_servers:
     url: http://localhost:7780/mcp
 ```
 
-### Connecting to a remote (Sprites) server
+### Connecting to a remote server (Sprites example)
 
-See [Security and Authentication](#security-and-authentication) for when you need this. On Sprites specifically, access control comes from exactly one of the two options below.
+See [Security and Authentication](#security-and-authentication) for when you need this. Option B is `oh-my-graph`'s own platform-agnostic auth mechanism and works identically on any host; Option A is a shortcut specific to this platform's own gateway.
 
-**Option A — Sprite gateway auth (default).** Leave the sprite's URL at its default `sprite` auth mode and run without `--auth`. Any client with a valid Sprites org bearer token can connect:
+**Option A — Sprite gateway auth (default on this platform).** Leave the sprite's URL at its default `sprite` auth mode and run without `--auth`. Any client with a valid Sprites org bearer token can connect:
 
 ```
 curl -H "Authorization: Bearer $SPRITE_TOKEN" https://<sprite>-<org>.sprites.app/omg-mcp
