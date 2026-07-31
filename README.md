@@ -59,6 +59,23 @@ tar -czf data.tar.gz -C ~/.oh-my-graph .
 sprite exec --file "data.tar.gz:/home/sprite/data.tar.gz" -- bash -c "mkdir -p /home/sprite/.oh-my-graph && tar -xzf /home/sprite/data.tar.gz -C /home/sprite/.oh-my-graph && rm /home/sprite/data.tar.gz"
 ```
 
+## Security and Authentication
+
+Whether authentication is required depends on network exposure, not on where you host `oh-my-graph`. If the server is only ever reached via `localhost`, no auth is needed — that's the default for a local install. The moment the port is bound to a non-localhost interface, or exposed through a reverse proxy, tunnel, or port forward — self-hosted on a VPS/cloud box, or hosted on Sprites — you should enable auth.
+
+Enable it with `--auth`, which requires two environment variables:
+
+```
+OMG_ISSUER=https://your-public-base-url
+OMG_OWNER_PASSPHRASE=<a-secret-only-you-know>
+```
+
+This turns on a full OAuth 2.1 Authorization Code + PKCE flow with Dynamic Client Registration — MCP clients self-register and your browser prompts once for the passphrase; bearer tokens on `/mcp` and `/omg-mcp` authorize every call after that. The web visualization UI (`/` and `/graph`) is protected separately, gated by the same passphrase via HTTP Basic auth.
+
+**Recommendation:** treat any non-localhost binding as a public endpoint by default and require `--auth`, paired with standard network hygiene — HTTPS termination via reverse proxy, firewall rules limiting source IPs.
+
+See [Connecting AI Clients → Connecting to a remote (Sprites) server](#connecting-to-a-remote-sprites-server) for the Sprites walkthrough of this mechanism, plus a Sprites-only shortcut for clients that don't need it.
+
 ## Connecting AI Clients
 
 Point your MCP client at `http://localhost:7780/mcp` (Streamable HTTP transport, JSON-RPC 2.0) for a local install, or at your Sprite's public URL for a remote one.
@@ -137,7 +154,7 @@ mcp_servers:
 
 ### Connecting to a remote (Sprites) server
 
-`oh-my-graph` ships with **no auth by default** — access control comes from exactly one of the two options below.
+See [Security and Authentication](#security-and-authentication) for when you need this. On Sprites specifically, access control comes from exactly one of the two options below.
 
 **Option A — Sprite gateway auth (default).** Leave the sprite's URL at its default `sprite` auth mode and run without `--auth`. Any client with a valid Sprites org bearer token can connect:
 
