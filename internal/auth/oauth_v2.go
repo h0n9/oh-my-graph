@@ -350,21 +350,79 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 // --- /authorize ---
 
 const authorizeHTML = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Authorize oh-my-graph</title>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Authorize — oh-my-graph</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:420px;margin:80px auto;padding:0 16px;color:#1a1a1a}
-h1{font-size:1.1rem}
-input[type=password]{width:100%;padding:8px;font-size:1rem;margin:12px 0;box-sizing:border-box}
-button{padding:8px 16px;font-size:1rem;cursor:pointer}
-.err{color:#b00020;margin-bottom:8px}
+  :root {
+    --bg:     #ffffff;
+    --fg:     #000000;
+    --muted:  #666666;
+    --border: #dddddd;
+    --err:    #b00020;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:     #111111;
+      --fg:     #eeeeee;
+      --muted:  #999999;
+      --border: #333333;
+      --err:    #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  form { width: 100%; max-width: 300px; }
+  h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+    margin-bottom: 8px;
+  }
+  .desc { color: var(--muted); font-size: 12px; margin-bottom: 24px; line-height: 1.5; }
+  input[type=password] {
+    width: 100%;
+    padding: 10px 12px;
+    font: inherit;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
+  input[type=password]:focus { outline: none; border-color: var(--fg); }
+  button {
+    width: 100%;
+    padding: 10px 12px;
+    font: inherit;
+    font-weight: 600;
+    background: var(--fg);
+    color: var(--bg);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  button:hover { opacity: 0.85; }
+  .err { color: var(--err); font-size: 12px; margin-bottom: 12px; }
 </style>
 </head>
 <body>
-<h1>Authorize {{.ClientName}}</h1>
-<p>Enter the owner passphrase to grant this client access to oh-my-graph.</p>
-{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 <form method="POST" action="/authorize">
+  <h1>Authorize {{.ClientName}}</h1>
+  <p class="desc">Enter the owner passphrase to grant this client access to oh-my-graph.</p>
+  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
   <input type="hidden" name="response_type" value="{{.ResponseType}}">
   <input type="hidden" name="client_id" value="{{.ClientID}}">
   <input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
