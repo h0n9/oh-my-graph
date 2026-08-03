@@ -23,6 +23,12 @@
 // Config.RefreshTokensFile or rotate Config.OwnerPassphrase to force every
 // client to re-authenticate (the latter affects all clients at once; there
 // is no per-client revocation).
+//
+// Refresh tokens are keyed by their SHA-256 hash, not their raw value, in
+// both the in-memory map and the persisted file -- defense in depth so a
+// leaked file or memory-only leak (core dump, swap, host-level inspection)
+// yields hashes, not directly usable credentials. See hashToken's doc
+// comment for why no salt/HMAC is needed here.
 package auth
 
 import (
@@ -1026,10 +1032,11 @@ func (s *Server) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request)
 	}
 
 	rt := form.Get("refresh_token")
+	rtHash := hashToken(rt)
 	s.mu.Lock()
-	old, ok := s.refreshTokens[rt]
+	old, ok := s.refreshTokens[rtHash]
 	if ok {
-		delete(s.refreshTokens, rt) // rotate on every use per OAuth 2.1 guidance for public clients
+		delete(s.refreshTokens, rtHash) // rotate on every use per OAuth 2.1 guidance for public clients
 	}
 	s.mu.Unlock()
 
@@ -1055,7 +1062,10 @@ func (s *Server) issueTokenPair(w http.ResponseWriter, clientID, scope string) {
 
 	s.mu.Lock()
 	s.tokens[access] = &accessToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(accessTokenTTL)}
-	s.refreshTokens[refresh] = &refreshToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(refreshTTL)}
+	// Store the token hashed, not raw -- see hashToken's doc comment. Only
+	// this response body ever carries the raw value; from here on the
+	// server (memory and disk alike) only ever holds its SHA-256 digest.
+	s.refreshTokens[hashToken(refresh)] = &refreshToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(refreshTTL)}
 	s.mu.Unlock()
 	s.persistRefreshTokens()
 

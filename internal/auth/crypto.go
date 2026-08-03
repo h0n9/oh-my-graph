@@ -6,6 +6,7 @@ import (
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -40,6 +41,20 @@ func encryptBlob(key, aad, plaintext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("read nonce: %w", err)
 	}
 	return gcm.Seal(nonce, nonce, plaintext, aad), nil
+}
+
+// hashToken returns the hex-encoded SHA-256 digest of token, used as the
+// refreshTokens map/persisted-file key instead of the raw token value --
+// defense in depth so that a leaked persisted file or a memory-only leak
+// (core dump, swap, host-level inspection) yields only hashes, not directly
+// usable credentials. A plain unkeyed hash is sufficient here (no salt or
+// HMAC needed, unlike password hashing): refresh tokens are uniformly
+// random 256-bit values from randomToken(32), not low-entropy/guessable
+// secrets, so neither dictionary nor rainbow-table attacks apply -- SHA-256
+// preimage resistance alone makes reversing the hash infeasible.
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // decryptBlob reverses encryptBlob; returns an error on auth-tag mismatch

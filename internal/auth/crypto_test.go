@@ -101,6 +101,20 @@ func TestDeriveKeyDeterministic(t *testing.T) {
 	}
 }
 
+func TestHashTokenDeterministicAndDistinct(t *testing.T) {
+	h1 := hashToken("token-a")
+	h2 := hashToken("token-a")
+	if h1 != h2 {
+		t.Fatal("hashToken: same input produced different hashes")
+	}
+	if h1 == hashToken("token-b") {
+		t.Fatal("hashToken: different inputs produced the same hash")
+	}
+	if h1 == "token-a" {
+		t.Fatal("hashToken: returned the raw input unchanged")
+	}
+}
+
 func TestDeriveKeyDifferentSaltsDiffer(t *testing.T) {
 	k1, err := deriveKey("same-passphrase", []byte("0123456789abcdef"))
 	if err != nil {

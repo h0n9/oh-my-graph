@@ -239,6 +239,38 @@ func TestLoadRefreshTokensDropsExpired(t *testing.T) {
 	}
 }
 
+// TestRefreshTokenStoredHashedNotRaw guards
+// refinement-hash-refresh-tokens-2026-08-03: the server must never keep the
+// raw refresh token as a map key (in memory or, by extension, in the
+// persisted file) -- only its SHA-256 hash.
+func TestRefreshTokenStoredHashedNotRaw(t *testing.T) {
+	dir := t.TempDir()
+	const passphrase = "correct horse battery staple"
+	cfg := testConfig(dir, passphrase)
+	client := noRedirectClient()
+
+	srv := newTestServer(t, cfg)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	clientID, redirectURI := registerClient(t, ts.URL)
+	_, refreshToken := authorizeAndExchange(t, client, ts.URL, clientID, redirectURI, passphrase)
+	if refreshToken == "" {
+		t.Fatal("expected a non-empty refresh token")
+	}
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if _, ok := srv.refreshTokens[refreshToken]; ok {
+		t.Fatal("raw refresh token must not be used as the map key")
+	}
+	if _, ok := srv.refreshTokens[hashToken(refreshToken)]; !ok {
+		t.Fatal("expected the refresh token's hash to be the map key")
+	}
+}
+
 func TestPersistedFileIsEncrypted(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(dir, "pw")
