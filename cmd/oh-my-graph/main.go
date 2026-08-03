@@ -47,9 +47,10 @@ func main() {
 			log.Fatal("oh-my-graph: --auth requires OMG_ISSUER and OMG_OWNER_PASSPHRASE to be set")
 		}
 		authSrv := auth.NewServer(auth.Config{
-			Issuer:          issuer,
-			OwnerPassphrase: passphrase,
-			ClientsFile:     filepath.Join(dir, "oauth-clients.json"),
+			Issuer:            issuer,
+			OwnerPassphrase:   passphrase,
+			ClientsFile:       filepath.Join(dir, "oauth-clients.json"),
+			RefreshTokensFile: filepath.Join(dir, "oauth-refresh-tokens.enc"),
 		})
 		authSrv.RegisterRoutes(mux)
 		mcpHandler = authSrv.RequireBearer(mcpServer)

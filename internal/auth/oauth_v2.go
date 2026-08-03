@@ -5,12 +5,24 @@
 // DCR registration is unauthenticated by spec, so the passphrase (not
 // registration) is the real access control.
 //
-// Codes and tokens are in-memory only: a process restart forces every
-// connected client to silently re-authenticate. DCR client registrations are
+// Authorization codes and access tokens are in-memory only and do not
+// survive a restart -- by design, since they're short-lived (60s and 1h
+// respectively) and cheap to reissue. Refresh tokens are longer-lived (90d)
+// and are optionally persisted to disk, AES-256-GCM-encrypted under a key
+// derived from Config.OwnerPassphrase (Config.RefreshTokensFile), so a
+// restarted process can silently reissue an access token via the
+// refresh_token grant instead of forcing every connected client through
+// interactive re-authentication. DCR client registrations are similarly
 // optionally persisted to disk (Config.ClientsFile) since clients treat
 // registration as a durable, one-time bootstrap step and have no way to
 // recover from their client_id becoming unknown -- unlike token expiry,
 // which they're built to handle gracefully.
+//
+// Because refresh tokens now survive restarts, "restart the server" is no
+// longer a way to revoke a leaked refresh token -- delete
+// Config.RefreshTokensFile or rotate Config.OwnerPassphrase to force every
+// client to re-authenticate (the latter affects all clients at once; there
+// is no per-client revocation).
 package auth
 
 import (
@@ -47,9 +59,10 @@ const (
 )
 
 type Config struct {
-	Issuer          string // public base URL, e.g. https://oh-my-graph-h0n9.sprites.app
-	OwnerPassphrase string
-	ClientsFile     string // optional; persists DCR client registrations across restarts
+	Issuer            string // public base URL, e.g. https://oh-my-graph-h0n9.sprites.app
+	OwnerPassphrase   string
+	ClientsFile       string // optional; persists DCR client registrations across restarts
+	RefreshTokensFile string // optional; persists refresh tokens (AES-256-GCM encrypted) across restarts
 }
 
 type client struct {
@@ -83,11 +96,12 @@ type refreshToken struct {
 }
 
 type Server struct {
-	issuer          string
-	ownerPassphrase string
-	clientsFile     string
-	authorizeTmpl   *template.Template
-	loginTmpl       *template.Template
+	issuer            string
+	ownerPassphrase   string
+	clientsFile       string
+	refreshTokensFile string
+	authorizeTmpl     *template.Template
+	loginTmpl         *template.Template
 
 	mu            sync.Mutex
 	clients       map[string]*client
@@ -95,22 +109,30 @@ type Server struct {
 	tokens        map[string]*accessToken
 	refreshTokens map[string]*refreshToken
 	sessions      map[string]time.Time // session ID -> expiry
+
+	// encKey and encSalt are derived once (in loadRefreshTokens, called from
+	// NewServer) and never mutated afterward, so they're safe to read from
+	// persistRefreshTokens without holding mu.
+	encKey  []byte
+	encSalt []byte
 }
 
 func NewServer(cfg Config) *Server {
 	s := &Server{
-		issuer:          strings.TrimRight(cfg.Issuer, "/"),
-		ownerPassphrase: cfg.OwnerPassphrase,
-		clientsFile:     cfg.ClientsFile,
-		authorizeTmpl:   template.Must(template.New("authorize").Parse(authorizeHTML)),
-		loginTmpl:       template.Must(template.New("login").Parse(loginHTML)),
-		clients:         make(map[string]*client),
-		codes:           make(map[string]*authCode),
-		tokens:          make(map[string]*accessToken),
-		refreshTokens:   make(map[string]*refreshToken),
-		sessions:        make(map[string]time.Time),
+		issuer:            strings.TrimRight(cfg.Issuer, "/"),
+		ownerPassphrase:   cfg.OwnerPassphrase,
+		clientsFile:       cfg.ClientsFile,
+		refreshTokensFile: cfg.RefreshTokensFile,
+		authorizeTmpl:     template.Must(template.New("authorize").Parse(authorizeHTML)),
+		loginTmpl:         template.Must(template.New("login").Parse(loginHTML)),
+		clients:           make(map[string]*client),
+		codes:             make(map[string]*authCode),
+		tokens:            make(map[string]*accessToken),
+		refreshTokens:     make(map[string]*refreshToken),
+		sessions:          make(map[string]time.Time),
 	}
 	s.loadClients()
+	s.loadRefreshTokens()
 	return s
 }
 
@@ -164,6 +186,138 @@ func (s *Server) persistClients() {
 	}
 	if err := os.Rename(tmp, s.clientsFile); err != nil {
 		log.Printf("oh-my-graph/auth: persistClients: rename: %v", err)
+	}
+}
+
+// refreshTokensAAD binds the encrypted refresh-tokens file to its purpose
+// and format version, so it can never be silently misinterpreted as some
+// other ciphertext (and gives a natural place to bump on a future format
+// change: change the string, old files simply fail to decrypt like any
+// other corruption).
+var refreshTokensAAD = []byte("oh-my-graph/oauth-refresh-tokens/v1")
+
+// loadRefreshTokens best-effort restores persisted refresh tokens and
+// establishes s.encKey/s.encSalt for this process's lifetime -- derived
+// once here (expensive, by design) and reused by every later
+// persistRefreshTokens call rather than re-derived per write. A missing
+// file, corrupt file, or wrong/rotated passphrase (GCM auth-tag failure)
+// all just log and leave the server with an empty refreshTokens map and a
+// freshly generated salt/key for future writes -- this is a durability
+// optimization, not a source of truth the server can't run without.
+// Already-expired entries are dropped on load.
+func (s *Server) loadRefreshTokens() {
+	if s.refreshTokensFile == "" {
+		return
+	}
+
+	salt := make([]byte, saltSize)
+	data, err := os.ReadFile(s.refreshTokensFile)
+	switch {
+	case err != nil && !os.IsNotExist(err):
+		log.Printf("oh-my-graph/auth: loadRefreshTokens: %v", err)
+		fallthrough
+	case err != nil:
+		if _, rerr := rand.Read(salt); rerr != nil {
+			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", rerr)
+			return
+		}
+	case len(data) < saltSize:
+		log.Printf("oh-my-graph/auth: loadRefreshTokens: %s: file too short, starting empty", s.refreshTokensFile)
+		if _, rerr := rand.Read(salt); rerr != nil {
+			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", rerr)
+			return
+		}
+	default:
+		copy(salt, data[:saltSize])
+	}
+
+	key, err := deriveKey(s.ownerPassphrase, salt)
+	if err != nil {
+		log.Printf("oh-my-graph/auth: loadRefreshTokens: derive key: %v", err)
+		return
+	}
+	s.encSalt = salt
+	s.encKey = key
+
+	if len(data) <= saltSize {
+		return // missing/too-short file, already logged above -- start empty
+	}
+
+	plaintext, err := decryptBlob(key, refreshTokensAAD, data[saltSize:])
+	if err != nil {
+		// Never log err's details beyond this generic line -- it carries no
+		// key material, but keep it that way deliberately (see package doc).
+		log.Printf("oh-my-graph/auth: loadRefreshTokens: %s: could not decrypt (passphrase changed or file corrupted?), starting empty", s.refreshTokensFile)
+		return
+	}
+
+	var tokens map[string]*refreshToken
+	if err := json.Unmarshal(plaintext, &tokens); err != nil {
+		log.Printf("oh-my-graph/auth: loadRefreshTokens: parse: %v", err)
+		return
+	}
+
+	now := time.Now()
+	kept := make(map[string]*refreshToken, len(tokens))
+	for tok, rt := range tokens {
+		if now.After(rt.ExpiresAt) {
+			continue
+		}
+		kept[tok] = rt
+	}
+	s.refreshTokens = kept
+	log.Printf("oh-my-graph/auth: loaded %d refresh token(s) from %s", len(kept), s.refreshTokensFile)
+}
+
+// persistRefreshTokens serializes the in-memory refreshTokens map and
+// atomically writes it to disk, AES-256-GCM-encrypted under s.encKey.
+//
+// Unlike persistClients, this holds s.mu for the *entire* marshal+encrypt+
+// write sequence, not just the marshal. Refresh tokens rotate on every use
+// (unlike DCR client registrations, which are rare), so releasing the lock
+// before I/O would let two concurrent /token calls' writes land on disk out
+// of order and resurrect an already-rotated refresh token. Do not
+// "simplify" this back to match persistClients's lock-then-unlock-then-write
+// shape -- that reintroduces the race this comment is here to prevent.
+func (s *Server) persistRefreshTokens() {
+	if s.refreshTokensFile == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.encKey == nil {
+		// loadRefreshTokens couldn't establish a key (e.g. salt generation
+		// failed) -- nothing safe to encrypt under, skip this write.
+		return
+	}
+
+	plaintext, err := json.Marshal(s.refreshTokens)
+	if err != nil {
+		log.Printf("oh-my-graph/auth: persistRefreshTokens: marshal: %v", err)
+		return
+	}
+	ciphertext, err := encryptBlob(s.encKey, refreshTokensAAD, plaintext)
+	if err != nil {
+		log.Printf("oh-my-graph/auth: persistRefreshTokens: encrypt: %v", err)
+		return
+	}
+	data := make([]byte, 0, len(s.encSalt)+len(ciphertext))
+	data = append(data, s.encSalt...)
+	data = append(data, ciphertext...)
+
+	tmp := s.refreshTokensFile + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(s.refreshTokensFile), 0o700); err != nil {
+		log.Printf("oh-my-graph/auth: persistRefreshTokens: mkdir: %v", err)
+		return
+	}
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("oh-my-graph/auth: persistRefreshTokens: write: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, s.refreshTokensFile); err != nil {
+		log.Printf("oh-my-graph/auth: persistRefreshTokens: rename: %v", err)
 	}
 }
 
@@ -903,6 +1057,7 @@ func (s *Server) issueTokenPair(w http.ResponseWriter, clientID, scope string) {
 	s.tokens[access] = &accessToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(accessTokenTTL)}
 	s.refreshTokens[refresh] = &refreshToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(refreshTTL)}
 	s.mu.Unlock()
+	s.persistRefreshTokens()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  access,
