@@ -36,6 +36,14 @@ const (
 	authCodeTTL    = 60 * time.Second
 	accessTokenTTL = time.Hour
 	refreshTTL     = 90 * 24 * time.Hour
+
+	// sessionTTL is long on purpose: as long as the process stays up, the
+	// owner should only ever be asked for the passphrase once. In practice
+	// what actually forces re-auth is a process restart (e.g. a Sprites
+	// cold-wake), which wipes sessions along with everything else in this
+	// package's in-memory stores — not this TTL.
+	sessionTTL        = 90 * 24 * time.Hour
+	sessionCookieName = "omg_session"
 )
 
 type Config struct {
@@ -79,12 +87,14 @@ type Server struct {
 	ownerPassphrase string
 	clientsFile     string
 	authorizeTmpl   *template.Template
+	loginTmpl       *template.Template
 
 	mu            sync.Mutex
 	clients       map[string]*client
 	codes         map[string]*authCode
 	tokens        map[string]*accessToken
 	refreshTokens map[string]*refreshToken
+	sessions      map[string]time.Time // session ID -> expiry
 }
 
 func NewServer(cfg Config) *Server {
@@ -93,10 +103,12 @@ func NewServer(cfg Config) *Server {
 		ownerPassphrase: cfg.OwnerPassphrase,
 		clientsFile:     cfg.ClientsFile,
 		authorizeTmpl:   template.Must(template.New("authorize").Parse(authorizeHTML)),
+		loginTmpl:       template.Must(template.New("login").Parse(loginHTML)),
 		clients:         make(map[string]*client),
 		codes:           make(map[string]*authCode),
 		tokens:          make(map[string]*accessToken),
 		refreshTokens:   make(map[string]*refreshToken),
+		sessions:        make(map[string]time.Time),
 	}
 	s.loadClients()
 	return s
@@ -161,6 +173,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/register", s.handleRegister)
 	mux.HandleFunc("/authorize", s.handleAuthorize)
 	mux.HandleFunc("/token", s.handleToken)
+	mux.HandleFunc("/login", s.handleLogin)
 }
 
 // RequireBearer wraps next so that requests must carry a valid access token
@@ -196,19 +209,36 @@ func (s *Server) unauthorized(w http.ResponseWriter) {
 	writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "missing or invalid bearer access token")
 }
 
-// RequireOwnerBasicAuth gates browser-facing pages (which can't attach a
-// Bearer header to a plain navigation) behind the same owner passphrase via
-// HTTP Basic Auth, so browsers get a native login prompt.
-func (s *Server) RequireOwnerBasicAuth(next http.Handler) http.Handler {
+// RequireOwnerSession gates browser-facing pages (which can't attach a
+// Bearer header to a plain navigation) behind a session cookie issued by
+// /login. The viz UI has exactly one JS-fetched route (/api/graph); it gets
+// a plain 401 so the page's own fetch().catch() handles it, while real page
+// navigations get redirected to /login to keep the passphrase prompt as an
+// in-app page instead of the browser's native Basic Auth dialog.
+func (s *Server) RequireOwnerSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, pass, ok := r.BasicAuth()
-		if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(s.ownerPassphrase)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="oh-my-graph"`)
+		if s.hasValidSession(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/api/graph" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		q := url.Values{"next": {r.URL.RequestURI()}}
+		http.Redirect(w, r, "/login?"+q.Encode(), http.StatusFound)
 	})
+}
+
+func (s *Server) hasValidSession(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return false
+	}
+	s.mu.Lock()
+	expiresAt, ok := s.sessions[c.Value]
+	s.mu.Unlock()
+	return ok && time.Now().Before(expiresAt)
 }
 
 // --- discovery metadata ---
@@ -510,6 +540,167 @@ func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURI, stat
 	}
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+// --- /login ---
+//
+// A styled in-app passphrase page for the viz UI, replacing the browser's
+// native HTTP Basic Auth dialog. Unlike authorizeHTML (a generic
+// OAuth-consent-screen look for third-party clients), this is part of the
+// product's own UI, so it borrows the actual app's dark/light
+// prefers-color-scheme palette and monospace font from index.html/graph.html
+// instead of introducing a third, inconsistent style.
+
+const loginHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>oh-my-graph</title>
+<style>
+  :root {
+    --bg:     #ffffff;
+    --fg:     #000000;
+    --muted:  #666666;
+    --border: #dddddd;
+    --err:    #b00020;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:     #111111;
+      --fg:     #eeeeee;
+      --muted:  #999999;
+      --border: #333333;
+      --err:    #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  form { width: 100%; max-width: 300px; }
+  h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+    margin-bottom: 24px;
+  }
+  input[type=password] {
+    width: 100%;
+    padding: 10px 12px;
+    font: inherit;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
+  input[type=password]:focus { outline: none; border-color: var(--fg); }
+  button {
+    width: 100%;
+    padding: 10px 12px;
+    font: inherit;
+    font-weight: 600;
+    background: var(--fg);
+    color: var(--bg);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  button:hover { opacity: 0.85; }
+  .err { color: var(--err); font-size: 12px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<form method="POST" action="/login">
+  <h1>oh-my-graph</h1>
+  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+  <input type="hidden" name="next" value="{{.Next}}">
+  <input type="password" name="passphrase" placeholder="Passphrase" autofocus required>
+  <button type="submit">Log in</button>
+</form>
+</body>
+</html>`
+
+type loginView struct {
+	Next  string
+	Error string
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		next := sanitizeNext(r.URL.Query().Get("next"))
+		s.renderLoginForm(w, next, "")
+
+	case http.MethodPost:
+		if err := r.ParseForm(); err != nil {
+			log.Printf("oh-my-graph/auth: login POST: invalid form body: %v", err)
+			http.Error(w, "invalid form body", http.StatusBadRequest)
+			return
+		}
+		next := sanitizeNext(r.PostForm.Get("next"))
+
+		passphrase := r.PostForm.Get("passphrase")
+		if subtle.ConstantTimeCompare([]byte(passphrase), []byte(s.ownerPassphrase)) != 1 {
+			log.Printf("oh-my-graph/auth: login POST: incorrect passphrase")
+			s.renderLoginForm(w, next, "Incorrect passphrase. Try again.")
+			return
+		}
+
+		sessionID, err := randomToken(32)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		expiresAt := time.Now().Add(sessionTTL)
+		s.mu.Lock()
+		s.sessions[sessionID] = expiresAt
+		s.mu.Unlock()
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookieName,
+			Value:    sessionID,
+			Path:     "/",
+			Expires:  expiresAt,
+			MaxAge:   int(sessionTTL.Seconds()),
+			HttpOnly: true,
+			Secure:   strings.HasPrefix(s.issuer, "https://"),
+			SameSite: http.SameSiteLaxMode,
+		})
+		log.Printf("oh-my-graph/auth: login POST: session issued, redirecting to %q", next)
+		http.Redirect(w, r, next, http.StatusSeeOther)
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) renderLoginForm(w http.ResponseWriter, next, formErr string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	view := loginView{Next: next, Error: formErr}
+	if err := s.loginTmpl.Execute(w, view); err != nil {
+		log.Printf("oh-my-graph: render login form: %v", err)
+	}
+}
+
+// sanitizeNext guards against open redirects: only an on-site relative path
+// is allowed through (a leading "/" that isn't "//", which browsers treat
+// as protocol-relative to an attacker-controlled host); anything else falls
+// back to "/".
+func sanitizeNext(next string) string {
+	if next == "" || next[0] != '/' || strings.HasPrefix(next, "//") {
+		return "/"
+	}
+	return next
 }
 
 // --- /token ---

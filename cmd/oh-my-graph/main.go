@@ -54,9 +54,9 @@ func main() {
 		authSrv.RegisterRoutes(mux)
 		mcpHandler = authSrv.RequireBearer(mcpServer)
 		// The viz UI is browser-facing, not an MCP client, so it can't carry a
-		// Bearer header on plain navigation — gate it with Basic Auth instead,
-		// using the same owner passphrase.
-		vizHandler = authSrv.RequireOwnerBasicAuth(vizHandler)
+		// Bearer header on plain navigation — gate it with a session cookie
+		// from /login instead, using the same owner passphrase.
+		vizHandler = authSrv.RequireOwnerSession(vizHandler)
 	}
 
 	mux.Handle("/mcp", mcpHandler)

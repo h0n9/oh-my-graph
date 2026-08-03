@@ -70,7 +70,7 @@ OMG_ISSUER=https://your-public-base-url
 OMG_OWNER_PASSPHRASE=<a-secret-only-you-know>
 ```
 
-This turns on a full OAuth 2.1 Authorization Code + PKCE flow with Dynamic Client Registration — MCP clients self-register and your browser prompts once for the passphrase; bearer tokens on `/mcp` and `/omg-mcp` authorize every call after that. The web visualization UI (`/` and `/graph`) is protected separately, gated by the same passphrase via HTTP Basic auth.
+This turns on a full OAuth 2.1 Authorization Code + PKCE flow with Dynamic Client Registration — MCP clients self-register and your browser prompts once for the passphrase; bearer tokens on `/mcp` and `/omg-mcp` authorize every call after that. The web visualization UI (`/` and `/graph`) is protected separately, gated by the same passphrase via an in-app `/login` page (a session cookie, not a browser Basic Auth prompt).
 
 **Recommendation:** treat any non-localhost binding as a public endpoint by default and require `--auth`, paired with standard network hygiene — HTTPS termination via reverse proxy, firewall rules limiting source IPs.
 
