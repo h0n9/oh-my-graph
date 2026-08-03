@@ -513,7 +513,7 @@ const authorizeHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Authorize — oh-my-graph</title>
 <style>
   :root {
@@ -533,6 +533,7 @@ const authorizeHTML = `<!DOCTYPE html>
     }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
   body {
     background: var(--bg);
     color: var(--fg);
@@ -541,8 +542,16 @@ const authorizeHTML = `<!DOCTYPE html>
     display: flex;
     align-items: center;
     justify-content: center;
+    /* 100vh alone under-covers a standalone iOS PWA's actual visible area
+       (Dynamic Island / home-indicator safe areas), which throws off
+       centering in the installed app despite it centering correctly in an
+       ordinary browser tab. 100dvh (dynamic viewport height) reflects the
+       real visible viewport; the plain 100vh line stays first as a
+       fallback for browsers that don't support dvh yet. */
     min-height: 100vh;
-    padding: 24px;
+    min-height: 100dvh;
+    padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+             max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
   }
   form { width: 100%; max-width: 300px; }
   h1 {
@@ -773,7 +782,7 @@ const loginHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>oh-my-graph</title>
 <style>
   :root {
@@ -793,6 +802,7 @@ const loginHTML = `<!DOCTYPE html>
     }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
   body {
     background: var(--bg);
     color: var(--fg);
@@ -801,8 +811,16 @@ const loginHTML = `<!DOCTYPE html>
     display: flex;
     align-items: center;
     justify-content: center;
+    /* 100vh alone under-covers a standalone iOS PWA's actual visible area
+       (Dynamic Island / home-indicator safe areas), which throws off
+       centering in the installed app despite it centering correctly in an
+       ordinary browser tab. 100dvh (dynamic viewport height) reflects the
+       real visible viewport; the plain 100vh line stays first as a
+       fallback for browsers that don't support dvh yet. */
     min-height: 100vh;
-    padding: 24px;
+    min-height: 100dvh;
+    padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+             max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
   }
   form { width: 100%; max-width: 300px; }
   h1 {
