@@ -931,9 +931,13 @@ func (s *Server) renderLoginForm(w http.ResponseWriter, next, formErr string) {
 // sanitizeNext guards against open redirects: only an on-site relative path
 // is allowed through (a leading "/" that isn't "//", which browsers treat
 // as protocol-relative to an attacker-controlled host); anything else falls
-// back to "/".
+// back to "/". Backslashes are normalized to "/" before the check, since
+// some browsers treat a leading "\" like "/" when resolving a relative URL
+// (e.g. "/\evil.com" behaving like "//evil.com"), which would otherwise
+// slip past a naive single-slash check.
 func sanitizeNext(next string) string {
-	if next == "" || next[0] != '/' || strings.HasPrefix(next, "//") {
+	normalized := strings.ReplaceAll(next, "\\", "/")
+	if normalized == "" || normalized[0] != '/' || strings.HasPrefix(normalized, "//") {
 		return "/"
 	}
 	return next
