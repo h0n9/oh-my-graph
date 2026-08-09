@@ -102,12 +102,13 @@ type refreshToken struct {
 }
 
 type Server struct {
-	issuer            string
-	ownerPassphrase   string
-	clientsFile       string
-	refreshTokensFile string
-	authorizeTmpl     *template.Template
-	loginTmpl         *template.Template
+	issuer               string
+	ownerPassphrase      string
+	clientsFile          string
+	refreshTokensFile    string
+	authorizeTmpl        *template.Template
+	authorizeSuccessTmpl *template.Template
+	loginTmpl            *template.Template
 
 	mu            sync.Mutex
 	clients       map[string]*client
@@ -125,17 +126,18 @@ type Server struct {
 
 func NewServer(cfg Config) *Server {
 	s := &Server{
-		issuer:            strings.TrimRight(cfg.Issuer, "/"),
-		ownerPassphrase:   cfg.OwnerPassphrase,
-		clientsFile:       cfg.ClientsFile,
-		refreshTokensFile: cfg.RefreshTokensFile,
-		authorizeTmpl:     template.Must(template.New("authorize").Parse(authorizeHTML)),
-		loginTmpl:         template.Must(template.New("login").Parse(loginHTML)),
-		clients:           make(map[string]*client),
-		codes:             make(map[string]*authCode),
-		tokens:            make(map[string]*accessToken),
-		refreshTokens:     make(map[string]*refreshToken),
-		sessions:          make(map[string]time.Time),
+		issuer:               strings.TrimRight(cfg.Issuer, "/"),
+		ownerPassphrase:      cfg.OwnerPassphrase,
+		clientsFile:          cfg.ClientsFile,
+		refreshTokensFile:    cfg.RefreshTokensFile,
+		authorizeTmpl:        template.Must(template.New("authorize").Parse(authorizeHTML)),
+		authorizeSuccessTmpl: template.Must(template.New("authorize-success").Parse(authorizeSuccessHTML)),
+		loginTmpl:            template.Must(template.New("login").Parse(loginHTML)),
+		clients:              make(map[string]*client),
+		codes:                make(map[string]*authCode),
+		tokens:               make(map[string]*accessToken),
+		refreshTokens:        make(map[string]*refreshToken),
+		sessions:             make(map[string]time.Time),
 	}
 	s.loadClients()
 	s.loadRefreshTokens()
@@ -588,7 +590,7 @@ const authorizeHTML = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-<form method="POST" action="/authorize">
+<form id="authorize-form" method="POST" action="/authorize">
   <h1>Authorize {{.ClientName}}</h1>
   <p class="desc">Enter the owner passphrase to grant this client access to oh-my-graph.</p>
   {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
@@ -600,8 +602,86 @@ const authorizeHTML = `<!DOCTYPE html>
   <input type="hidden" name="state" value="{{.State}}">
   <input type="hidden" name="scope" value="{{.Scope}}">
   <input type="password" name="passphrase" placeholder="Passphrase" autofocus required>
-  <button type="submit">Authorize</button>
+  <button id="authorize-btn" type="submit">Authorize</button>
 </form>
+<script>
+document.getElementById('authorize-form').addEventListener('submit', function () {
+  var btn = document.getElementById('authorize-btn');
+  btn.disabled = true;
+  btn.textContent = 'Authorizing…';
+});
+</script>
+</body>
+</html>`
+
+const authorizeSuccessHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta http-equiv="refresh" content="1.5;url={{.RedirectURL}}">
+<title>Authorized — oh-my-graph</title>
+<style>
+  :root {
+    --bg:     #ffffff;
+    --fg:     #000000;
+    --muted:  #666666;
+    --border: #dddddd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:     #111111;
+      --fg:     #eeeeee;
+      --muted:  #999999;
+      --border: #333333;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+             max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+  }
+  .card { width: 100%; max-width: 300px; }
+  h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+    margin-bottom: 8px;
+  }
+  .desc { color: var(--muted); font-size: 12px; margin-bottom: 24px; line-height: 1.5; }
+  a.btn {
+    display: block;
+    width: 100%;
+    padding: 10px 12px;
+    font: inherit;
+    font-weight: 600;
+    background: var(--fg);
+    color: var(--bg);
+    border: none;
+    border-radius: 6px;
+    text-align: center;
+    text-decoration: none;
+    box-sizing: border-box;
+  }
+  a.btn:hover { opacity: 0.85; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Authorization is complete.</h1>
+  <p class="desc">You're being redirected back to {{.ClientName}}…</p>
+  <a class="btn" href="{{.RedirectURL}}">Continue to {{.ClientName}} →</a>
+</div>
 </body>
 </html>`
 
@@ -619,6 +699,11 @@ type authorizeView struct {
 	authorizeParams
 	ClientName string
 	Error      string
+}
+
+type authorizeSuccessView struct {
+	ClientName  string
+	RedirectURL string
 }
 
 func parseAuthorizeParams(values url.Values) authorizeParams {
@@ -735,7 +820,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		}
 		redirectURL.RawQuery = q.Encode()
 		log.Printf("oh-my-graph/auth: authorize POST: issued code for client_id=%q (redirect target and code omitted from log)", p.ClientID)
-		http.Redirect(w, r, redirectURL.String(), http.StatusFound)
+		s.renderAuthorizeSuccess(w, c.Name, redirectURL.String())
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -750,6 +835,17 @@ func (s *Server) renderAuthorizeForm(w http.ResponseWriter, p authorizeParams, c
 	view := authorizeView{authorizeParams: p, ClientName: clientName, Error: formErr}
 	if err := s.authorizeTmpl.Execute(w, view); err != nil {
 		log.Printf("oh-my-graph: render authorize form: %v", err)
+	}
+}
+
+func (s *Server) renderAuthorizeSuccess(w http.ResponseWriter, clientName, redirectURL string) {
+	if clientName == "" {
+		clientName = "this client"
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	view := authorizeSuccessView{ClientName: clientName, RedirectURL: redirectURL}
+	if err := s.authorizeSuccessTmpl.Execute(w, view); err != nil {
+		log.Printf("oh-my-graph: render authorize success: %v", err)
 	}
 }
 

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +19,10 @@ import (
 
 	"golang.org/x/oauth2"
 )
+
+// authorizeSuccessLinkRe extracts the "Continue to <client>" link's href from
+// the rendered authorizeSuccessHTML confirmation page.
+var authorizeSuccessLinkRe = regexp.MustCompile(`<a class="btn" href="([^"]+)">`)
 
 func testConfig(dir, passphrase string) Config {
 	return Config{
@@ -96,17 +102,25 @@ func authorizeAndExchange(t *testing.T, client *http.Client, baseURL, clientID, 
 		t.Fatalf("authorize: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
+	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("authorize: expected 302, got %d: %s", resp.StatusCode, b)
+		t.Fatalf("authorize: expected 200 (confirmation page), got %d: %s", resp.StatusCode, b)
 	}
-	loc, err := url.Parse(resp.Header.Get("Location"))
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("authorize: parse Location: %v", err)
+		t.Fatalf("authorize: read body: %v", err)
+	}
+	m := authorizeSuccessLinkRe.FindSubmatch(body)
+	if m == nil {
+		t.Fatalf("authorize: no confirmation link found in response: %s", body)
+	}
+	loc, err := url.Parse(html.UnescapeString(string(m[1])))
+	if err != nil {
+		t.Fatalf("authorize: parse confirmation link: %v", err)
 	}
 	code := loc.Query().Get("code")
 	if code == "" {
-		t.Fatalf("authorize: no code in redirect: %s", loc)
+		t.Fatalf("authorize: no code in confirmation link: %s", loc)
 	}
 
 	tresp, err := http.PostForm(baseURL+"/token", url.Values{
@@ -318,5 +332,130 @@ func TestConcurrentPersistDoesNotLoseTokens(t *testing.T) {
 	srv2 := newTestServer(t, cfg) // fresh load from whatever ended up on disk
 	if got := len(srv2.refreshTokens); got != n {
 		t.Fatalf("expected %d persisted refresh tokens after concurrent writes, got %d", n, got)
+	}
+}
+
+// TestAuthorizeFormHasLoadingStateScript guards
+// decision-authorize-confirmation-page-design-2026-08-05: the passphrase
+// form must carry the ids and inline script that give the submit button an
+// in-flight "Authorizing…" state, so a tap on Authorize doesn't look
+// unresponsive during the request round-trip.
+func TestAuthorizeFormHasLoadingStateScript(t *testing.T) {
+	dir := t.TempDir()
+	const passphrase = "correct horse battery staple"
+	cfg := testConfig(dir, passphrase)
+	srv := newTestServer(t, cfg)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	clientID, redirectURI := registerClient(t, ts.URL)
+	verifier := oauth2.GenerateVerifier()
+	challenge := oauth2.S256ChallengeFromVerifier(verifier)
+	q := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {redirectURI},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	resp, err := http.Get(ts.URL + "/authorize?" + q.Encode())
+	if err != nil {
+		t.Fatalf("GET /authorize: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	for _, want := range []string{
+		`id="authorize-form"`,
+		`id="authorize-btn"`,
+		"<script>",
+		"Authorizing",
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("expected authorize form to contain %q, got: %s", want, body)
+		}
+	}
+}
+
+// TestAuthorizeSuccessPageRendersConfirmation guards
+// decision-authorize-confirmation-page-design-2026-08-05: on a correct
+// passphrase, /authorize must render a real confirmation page (not an
+// immediate redirect) with both an auto-advancing meta-refresh and a manual
+// fallback link, both pointing at the client's redirect_uri with the issued
+// code and state attached.
+func TestAuthorizeSuccessPageRendersConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	const passphrase = "correct horse battery staple"
+	cfg := testConfig(dir, passphrase)
+	srv := newTestServer(t, cfg)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	clientID, redirectURI := registerClient(t, ts.URL)
+	verifier := oauth2.GenerateVerifier()
+	challenge := oauth2.S256ChallengeFromVerifier(verifier)
+	form := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {redirectURI},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"state":                 {"xyz"},
+		"passphrase":            {passphrase},
+	}
+	resp, err := http.PostForm(ts.URL+"/authorize", form)
+	if err != nil {
+		t.Fatalf("POST /authorize: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 confirmation page, got %d: %s", resp.StatusCode, b)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	if !bytes.Contains(body, []byte("Authorization is complete")) {
+		t.Fatalf("expected confirmation text, got: %s", body)
+	}
+
+	metaRe := regexp.MustCompile(`<meta http-equiv="refresh" content="[\d.]+;url=([^"]+)">`)
+	m := metaRe.FindSubmatch(body)
+	if m == nil {
+		t.Fatalf("expected a meta-refresh tag with a redirect target, got: %s", body)
+	}
+	metaTarget, err := url.Parse(html.UnescapeString(string(m[1])))
+	if err != nil {
+		t.Fatalf("parse meta-refresh target: %v", err)
+	}
+
+	link := authorizeSuccessLinkRe.FindSubmatch(body)
+	if link == nil {
+		t.Fatalf("expected a manual fallback link, got: %s", body)
+	}
+	linkTarget, err := url.Parse(html.UnescapeString(string(link[1])))
+	if err != nil {
+		t.Fatalf("parse fallback link target: %v", err)
+	}
+
+	for name, target := range map[string]*url.URL{"meta-refresh": metaTarget, "fallback link": linkTarget} {
+		if got := target.Scheme + "://" + target.Host + target.Path; got != redirectURI {
+			t.Fatalf("%s target base = %q, want %q", name, got, redirectURI)
+		}
+		if target.Query().Get("code") == "" {
+			t.Fatalf("%s target missing code: %s", name, target)
+		}
+		if got := target.Query().Get("state"); got != "xyz" {
+			t.Fatalf("%s target state = %q, want %q", name, got, "xyz")
+		}
 	}
 }
