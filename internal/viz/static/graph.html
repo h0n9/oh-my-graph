@@ -680,13 +680,13 @@ function clearFocus() {
 
 // ── detail panel ──────────────────────────────────────────────────────────────
 function openDetail(n) {
-  // A deliberate click, unlike hover, does break out of type-highlight mode.
-  if (highlightedType !== null) {
-    highlightedType = null;
-    renderLegend();
-    applyTypeHighlight();
+  // While a type-highlight is active, leave it alone -- inspecting a node
+  // shouldn't reset the filter. focusNode()'s connectivity-based dim pass
+  // is skipped in that case too, since it shares the .dimmed class with
+  // the type-highlight and would otherwise stomp it.
+  if (highlightedType === null) {
+    focusNode(n.id);
   }
-  focusNode(n.id);
 
   const nodeMap = Object.fromEntries(nodes.map(x => [x.id, x]));
   const myEdges = (adjEdges[n.id] || []).map(eid => edgeEls[eid]?.edge).filter(Boolean);
@@ -745,6 +745,10 @@ function openDetail(n) {
 
 function closeDetail() {
   detail.classList.remove('visible');
+  // Same reasoning as openDetail(): don't touch focus/dim state while a
+  // type-highlight is active, so closing the panel leaves the filter
+  // exactly as it was.
+  if (highlightedType !== null) return;
   if (hoveredNodeId) focusNode(hoveredNodeId);
   else clearFocus();
 }
