@@ -77,6 +77,27 @@
   header .topic { font-weight: 600; font-size: 14px; }
   header .stats { margin-left: auto; color: var(--muted); font-size: 12px; }
 
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .legend-item {
+    font: inherit;
+    font-size: 11px;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .legend-item:hover { color: var(--fg); border-color: var(--fg); }
+  .legend-item.active { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+
   .main {
     flex: 1;
     position: relative;
@@ -103,6 +124,10 @@
   .node-circle.blocker  { stroke-dasharray: 4 2; }
   .node-circle.question { stroke-dasharray: 2 2; }
   .node-circle.focused  { stroke-width: 3; }
+  .node-circle.type-glow {
+    stroke-width: 3;
+    filter: drop-shadow(0 0 6px var(--node-stroke));
+  }
 
   .node-label {
     fill: var(--label-color);
@@ -259,6 +284,8 @@
   <span class="stats" id="statsLabel"></span>
 </header>
 
+<div class="legend" id="legend"></div>
+
 <div class="main">
   <svg id="canvas">
     <defs>
@@ -302,6 +329,7 @@ let nodes = [], edges = [];
 let sim = null;
 let focusedNodeId  = null;
 let hoveredNodeId  = null; // tracks mouse position regardless of panel state
+let highlightedType = null; // active type-highlight from the legend, or null
 
 // ── fetch & boot ─────────────────────────────────────────────────────────────
 function updateStatsLabel() {
@@ -315,6 +343,7 @@ fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
     nodes = data.nodes || [];
     edges = data.edges || [];
     updateStatsLabel();
+    renderLegend();
     initSim();
     render();
     startSim();
@@ -372,6 +401,10 @@ function refreshGraph() {
       });
 
       updateStatsLabel();
+      if (newNodes.length) {
+        renderLegend();
+        applyTypeHighlight();
+      }
       if (!sim) startSim();
     })
     .catch(() => { /* transient poll failure, retry on next interval */ });
@@ -452,6 +485,7 @@ const edgeLayer = document.getElementById('edgeLayer');
 const nodeLayer = document.getElementById('nodeLayer');
 const detail    = document.getElementById('detail');
 const detailContent = document.getElementById('detailContent');
+const legend    = document.getElementById('legend');
 
 const edgeEls = {};
 const nodeEls = {};
@@ -493,7 +527,7 @@ function createNodeEl(n) {
   g.appendChild(labelEl);
   g.appendChild(typeEl);
   nodeLayer.appendChild(g);
-  nodeEls[n.id] = { g, circle, labelEl, typeEl };
+  nodeEls[n.id] = { g, circle, labelEl, typeEl, type: n.type };
 
   g.addEventListener('mouseenter', () => {
     hoveredNodeId = n.id;
@@ -548,7 +582,46 @@ function render() {
 }
 
 // ── focus / highlight ─────────────────────────────────────────────────────────
+function renderLegend() {
+  const types = [...new Set(nodes.map(n => n.type))].sort();
+  legend.innerHTML = '';
+  types.forEach(type => {
+    const btn = document.createElement('button');
+    btn.className = 'legend-item' + (type === highlightedType ? ' active' : '');
+    btn.dataset.type = type;
+    btn.textContent = type;
+    btn.addEventListener('click', () => setTypeHighlight(type));
+    legend.appendChild(btn);
+  });
+}
+
+function applyTypeHighlight() {
+  Object.values(nodeEls).forEach(el => {
+    const match = highlightedType !== null && el.type === highlightedType;
+    const dim = highlightedType !== null && !match;
+    el.circle.classList.toggle('dimmed', dim);
+    el.labelEl.classList.toggle('dimmed', dim);
+    el.typeEl.classList.toggle('dimmed', dim);
+    el.circle.classList.toggle('type-glow', match);
+  });
+}
+
+function setTypeHighlight(type) {
+  highlightedType = (highlightedType === type) ? null : type;
+  if (highlightedType) {
+    detail.classList.remove('visible');
+    clearFocus();
+  }
+  renderLegend();
+  applyTypeHighlight();
+}
+
 function focusNode(nodeId) {
+  if (highlightedType !== null) {
+    highlightedType = null;
+    renderLegend();
+    applyTypeHighlight();
+  }
   if (focusedNodeId === nodeId) return;
   focusedNodeId = nodeId;
 
@@ -593,7 +666,7 @@ function clearFocus() {
 
 // ── detail panel ──────────────────────────────────────────────────────────────
 function openDetail(n) {
-  focusNode(n.id);
+  focusNode(n.id); // also clears any active type-highlight, see focusNode
 
   const nodeMap = Object.fromEntries(nodes.map(x => [x.id, x]));
   const myEdges = (adjEdges[n.id] || []).map(eid => edgeEls[eid]?.edge).filter(Boolean);
