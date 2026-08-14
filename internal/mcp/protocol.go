@@ -76,20 +76,38 @@ const getTopicSchema = `{
   "required": ["topic"]
 }`
 
-const readNodesSinceSchema = `{
+const readNodesSinceCursorSchema = `{
   "type": "object",
   "properties": {
     "topic":  { "type": "string", "description": "Topic name" },
-    "cursor": { "type": "integer", "description": "Sequence number to read after (default: 0)", "default": 0 },
+    "cursor": { "type": "integer", "description": "Sequence number to read after. 0 = beginning. -1 = start from newest node.", "default": 0 },
     "limit":  { "type": "integer", "description": "Maximum number of nodes to return (default: 100; must be between 1 and 1000)", "default": 100, "minimum": 1, "maximum": 1000 },
     "types":  {
       "type": "array",
       "items": { "type": "string", "enum": ["*","finding","concept","blocker","question","decision","artifact","entity","event","message"] },
       "default": ["finding"],
       "description": "Node types to include. Defaults to [\"finding\"] when omitted. Pass [\"*\"] to disable filtering and return every type."
-    }
+    },
+    "sort": { "type": "string", "enum": ["ascending", "descending"], "default": "ascending", "description": "ascending (default) or descending." }
   },
   "required": ["topic"]
+}`
+
+const readNodesSinceDateSchema = `{
+  "type": "object",
+  "properties": {
+    "topic": { "type": "string", "description": "Topic name" },
+    "date":  { "type": "string", "description": "Return nodes added on or after this date. RFC3339 timestamp or YYYY-MM-DD." },
+    "limit": { "type": "integer", "description": "Maximum number of nodes to return (default: 100; must be between 1 and 1000)", "default": 100, "minimum": 1, "maximum": 1000 },
+    "types": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["*","finding","concept","blocker","question","decision","artifact","entity","event","message"] },
+      "default": ["finding"],
+      "description": "Node types to include. Defaults to [\"finding\"] when omitted. Pass [\"*\"] to disable filtering and return every type."
+    },
+    "sort": { "type": "string", "enum": ["ascending", "descending"], "default": "ascending", "description": "ascending (default) or descending." }
+  },
+  "required": ["topic", "date"]
 }`
 
 const readNodeSchema = `{
@@ -112,7 +130,7 @@ const neighborsSchema = `{
       "type": "array",
       "items": { "type": "string", "enum": ["*","resolves","produces","blocks","causes","supports","contradicts","depends_on","part_of","references","replies_to","deprecates"] },
       "default": ["*"],
-      "description": "Edge types to include. Defaults to [\"*\"] (all types). Distinct from read_nodes_since's node-type filter."
+      "description": "Edge types to include. Defaults to [\"*\"] (all types). Distinct from read_nodes_since_cursor's node-type filter."
     },
     "limit": { "type": "integer", "description": "Maximum number of neighbors to return (default: 50; must be between 1 and 200)", "default": 50, "minimum": 1, "maximum": 200 }
   },

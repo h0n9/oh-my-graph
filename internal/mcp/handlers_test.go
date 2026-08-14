@@ -9,10 +9,10 @@ import (
 	"github.com/h0n9/oh-my-graph/internal/graph"
 )
 
-func TestReadNodesSinceHandler_LimitBounds(t *testing.T) {
+func TestReadNodesSinceCursorHandler_LimitBounds(t *testing.T) {
 	mgr := graph.NewManager(t.TempDir())
 	defer mgr.Close()
-	handler := readNodesSinceHandler(mgr)
+	handler := readNodesSinceCursorHandler(mgr)
 
 	call := func(t *testing.T, params string) (any, *RPCError) {
 		t.Helper()
@@ -55,10 +55,10 @@ func TestReadNodesSinceHandler_LimitBounds(t *testing.T) {
 	})
 }
 
-func TestReadNodesSinceHandler_TypesFilter(t *testing.T) {
+func TestReadNodesSinceCursorHandler_TypesFilter(t *testing.T) {
 	mgr := graph.NewManager(t.TempDir())
 	defer mgr.Close()
-	readHandler := readNodesSinceHandler(mgr)
+	readHandler := readNodesSinceCursorHandler(mgr)
 	writeH := writeHandler(mgr)
 
 	call := func(t *testing.T, params string) (any, *RPCError) {
@@ -147,6 +147,221 @@ func TestReadNodesSinceHandler_TypesFilter(t *testing.T) {
 			t.Fatalf("expected all 5 nodes, got %d", len(summaries))
 		}
 	})
+}
+
+func TestReadNodesSinceCursorHandler_NegativeOneSentinel(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	readHandler := readNodesSinceCursorHandler(mgr)
+	writeH := writeHandler(mgr)
+
+	call := func(t *testing.T, params string) (any, *RPCError) {
+		t.Helper()
+		return readHandler(json.RawMessage(params))
+	}
+	summariesOf := func(t *testing.T, result any) []graph.NodeSummary {
+		t.Helper()
+		res, ok := result.(*CallToolResult)
+		if !ok {
+			t.Fatalf("expected *CallToolResult, got %T", result)
+		}
+		var summaries []graph.NodeSummary
+		if err := json.Unmarshal([]byte(res.Content[0].Text), &summaries); err != nil {
+			t.Fatalf("failed to unmarshal summaries: %v", err)
+		}
+		return summaries
+	}
+
+	seed := `{"topic":"t1","nodes":[
+		{"node_id":"f1","type":"finding","summary":"one"},
+		{"node_id":"f2","type":"finding","summary":"two"}
+	]}`
+	if _, rpcErr := writeH(json.RawMessage(seed)); rpcErr != nil {
+		t.Fatalf("failed to seed nodes: %v", rpcErr)
+	}
+
+	t.Run("cursor=-1 immediately after a write returns nothing new", func(t *testing.T) {
+		result, rpcErr := call(t, `{"topic": "t1", "cursor": -1}`)
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %v", rpcErr)
+		}
+		if got := summariesOf(t, result); len(got) != 0 {
+			t.Fatalf("expected no nodes newer than the current head, got %d: %+v", len(got), got)
+		}
+	})
+
+	t.Run("explicit cursor at the pre-write head sees only the new node", func(t *testing.T) {
+		if _, rpcErr := writeH(json.RawMessage(`{"topic":"t1","nodes":[{"node_id":"f3","type":"finding","summary":"three"}]}`)); rpcErr != nil {
+			t.Fatalf("failed to seed third node: %v", rpcErr)
+		}
+		result, rpcErr := call(t, `{"topic": "t1", "cursor": 2}`)
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %v", rpcErr)
+		}
+		got := summariesOf(t, result)
+		if len(got) != 1 || got[0].NodeID != "f3" {
+			t.Fatalf("expected exactly [f3], got %+v", got)
+		}
+	})
+}
+
+func TestReadNodesSinceCursorHandler_SortDescending(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	readHandler := readNodesSinceCursorHandler(mgr)
+	writeH := writeHandler(mgr)
+
+	seed := `{"topic":"t1","nodes":[
+		{"node_id":"f1","type":"finding","summary":"one"},
+		{"node_id":"f2","type":"finding","summary":"two"},
+		{"node_id":"f3","type":"finding","summary":"three"}
+	]}`
+	if _, rpcErr := writeH(json.RawMessage(seed)); rpcErr != nil {
+		t.Fatalf("failed to seed nodes: %v", rpcErr)
+	}
+
+	result, rpcErr := readHandler(json.RawMessage(`{"topic": "t1", "sort": "descending"}`))
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	res, ok := result.(*CallToolResult)
+	if !ok {
+		t.Fatalf("expected *CallToolResult, got %T", result)
+	}
+	var summaries []graph.NodeSummary
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &summaries); err != nil {
+		t.Fatalf("failed to unmarshal summaries: %v", err)
+	}
+	want := []string{"f3", "f2", "f1"}
+	if len(summaries) != len(want) {
+		t.Fatalf("expected %d nodes, got %d: %+v", len(want), len(summaries), summaries)
+	}
+	for i, id := range want {
+		if summaries[i].NodeID != id {
+			t.Fatalf("expected descending order %v, got %+v", want, summaries)
+		}
+	}
+}
+
+func TestReadNodesSinceCursorHandler_InvalidSort(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	handler := readNodesSinceCursorHandler(mgr)
+
+	_, rpcErr := handler(json.RawMessage(`{"topic": "t1", "sort": "sideways"}`))
+	if rpcErr == nil {
+		t.Fatal("expected error for sort=\"sideways\", got nil")
+	}
+}
+
+func TestReadNodesSinceDateHandler_ValidFormats(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	dateHandler := readNodesSinceDateHandler(mgr)
+	writeH := writeHandler(mgr)
+
+	if _, rpcErr := writeH(json.RawMessage(`{"topic":"t1","nodes":[{"node_id":"f1","type":"finding","summary":"one"}]}`)); rpcErr != nil {
+		t.Fatalf("failed to seed node: %v", rpcErr)
+	}
+
+	summariesOf := func(t *testing.T, result any) []graph.NodeSummary {
+		t.Helper()
+		res, ok := result.(*CallToolResult)
+		if !ok {
+			t.Fatalf("expected *CallToolResult, got %T", result)
+		}
+		var summaries []graph.NodeSummary
+		if err := json.Unmarshal([]byte(res.Content[0].Text), &summaries); err != nil {
+			t.Fatalf("failed to unmarshal summaries: %v", err)
+		}
+		return summaries
+	}
+
+	t.Run("RFC3339 date far in the past includes everything", func(t *testing.T) {
+		result, rpcErr := dateHandler(json.RawMessage(`{"topic": "t1", "date": "2000-01-01T00:00:00Z"}`))
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %v", rpcErr)
+		}
+		if got := summariesOf(t, result); len(got) != 1 {
+			t.Fatalf("expected 1 node, got %d: %+v", len(got), got)
+		}
+	})
+
+	t.Run("plain YYYY-MM-DD date far in the past includes everything", func(t *testing.T) {
+		result, rpcErr := dateHandler(json.RawMessage(`{"topic": "t1", "date": "2000-01-01"}`))
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %v", rpcErr)
+		}
+		if got := summariesOf(t, result); len(got) != 1 {
+			t.Fatalf("expected 1 node, got %d: %+v", len(got), got)
+		}
+	})
+
+	t.Run("date far in the future returns nothing", func(t *testing.T) {
+		result, rpcErr := dateHandler(json.RawMessage(`{"topic": "t1", "date": "2099-01-01"}`))
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %v", rpcErr)
+		}
+		if got := summariesOf(t, result); len(got) != 0 {
+			t.Fatalf("expected 0 nodes, got %d: %+v", len(got), got)
+		}
+	})
+}
+
+func TestReadNodesSinceDateHandler_InvalidDate(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	handler := readNodesSinceDateHandler(mgr)
+
+	for _, tc := range []struct{ name, params string }{
+		{"missing date", `{"topic": "t1"}`},
+		{"garbage date", `{"topic": "t1", "date": "not-a-date"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := handler(json.RawMessage(tc.params))
+			if rpcErr == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+	}
+}
+
+func TestReadNodesSinceDateHandler_TypesAndSort(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	dateHandler := readNodesSinceDateHandler(mgr)
+	writeH := writeHandler(mgr)
+
+	seed := `{"topic":"t1","nodes":[
+		{"node_id":"f1","type":"finding","summary":"one"},
+		{"node_id":"d1","type":"decision","summary":"two"},
+		{"node_id":"f2","type":"finding","summary":"three"}
+	]}`
+	if _, rpcErr := writeH(json.RawMessage(seed)); rpcErr != nil {
+		t.Fatalf("failed to seed nodes: %v", rpcErr)
+	}
+
+	result, rpcErr := dateHandler(json.RawMessage(`{"topic": "t1", "date": "2000-01-01", "types": ["finding"], "sort": "descending"}`))
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	res, ok := result.(*CallToolResult)
+	if !ok {
+		t.Fatalf("expected *CallToolResult, got %T", result)
+	}
+	var summaries []graph.NodeSummary
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &summaries); err != nil {
+		t.Fatalf("failed to unmarshal summaries: %v", err)
+	}
+	want := []string{"f2", "f1"}
+	if len(summaries) != len(want) {
+		t.Fatalf("expected %d finding nodes, got %d: %+v", len(want), len(summaries), summaries)
+	}
+	for i, id := range want {
+		if summaries[i].NodeID != id {
+			t.Fatalf("expected descending finding-only order %v, got %+v", want, summaries)
+		}
+	}
 }
 
 func TestNeighborsHandler_Validation(t *testing.T) {
@@ -281,14 +496,14 @@ func BenchmarkWriteHandler(b *testing.B) {
 	}
 }
 
-// BenchmarkReadNodesSinceHandler measures the full JSON-RPC path for the
-// default (types=["finding"]) read_nodes_since call against a modest,
-// pre-seeded topic.
-func BenchmarkReadNodesSinceHandler(b *testing.B) {
+// BenchmarkReadNodesSinceCursorHandler measures the full JSON-RPC path for
+// the default (types=["finding"]) read_nodes_since_cursor call against a
+// modest, pre-seeded topic.
+func BenchmarkReadNodesSinceCursorHandler(b *testing.B) {
 	mgr := graph.NewManager(b.TempDir())
 	defer mgr.Close()
 	writeH := writeHandler(mgr)
-	readH := readNodesSinceHandler(mgr)
+	readH := readNodesSinceCursorHandler(mgr)
 
 	const n = 1000
 	nodes := make([]string, 0, n)
@@ -304,6 +519,34 @@ func BenchmarkReadNodesSinceHandler(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, rpcErr := readH(params); rpcErr != nil {
+			b.Fatalf("read: %v", rpcErr)
+		}
+	}
+}
+
+// BenchmarkReadNodesSinceDateHandler measures the full JSON-RPC path for
+// read_nodes_since_date against the same modest, pre-seeded topic as
+// BenchmarkReadNodesSinceCursorHandler, for a direct comparison.
+func BenchmarkReadNodesSinceDateHandler(b *testing.B) {
+	mgr := graph.NewManager(b.TempDir())
+	defer mgr.Close()
+	writeH := writeHandler(mgr)
+	dateH := readNodesSinceDateHandler(mgr)
+
+	const n = 1000
+	nodes := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		nodes = append(nodes, fmt.Sprintf(`{"node_id":"n%d","type":"finding","summary":"x"}`, i))
+	}
+	seed := json.RawMessage(fmt.Sprintf(`{"topic":"bench","nodes":[%s]}`, strings.Join(nodes, ",")))
+	if _, rpcErr := writeH(seed); rpcErr != nil {
+		b.Fatalf("seed write: %v", rpcErr)
+	}
+
+	params := json.RawMessage(`{"topic":"bench","date":"2000-01-01","limit":100}`)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, rpcErr := dateH(params); rpcErr != nil {
 			b.Fatalf("read: %v", rpcErr)
 		}
 	}

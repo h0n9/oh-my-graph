@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/h0n9/oh-my-graph/internal/graph"
 )
@@ -52,53 +53,95 @@ func getTopicHandler(mgr *graph.Manager) handlerFunc {
 	}
 }
 
-func readNodesSinceHandler(mgr *graph.Manager) handlerFunc {
+// parseNodesSinceLimit validates the shared limit param used by both
+// read_nodes_since_cursor and read_nodes_since_date, defaulting to 100.
+func parseNodesSinceLimit(p *int) (int, *RPCError) {
+	if p == nil {
+		return 100, nil
+	}
+	if *p <= 0 || *p > maxNodesSinceLimit {
+		return 0, &RPCError{Code: -32602, Message: "invalid params: limit must be between 1 and 1000"}
+	}
+	return *p, nil
+}
+
+// parseNodesSinceTypes validates the shared types param used by both
+// read_nodes_since_cursor and read_nodes_since_date, defaulting to
+// []NodeType{finding} when omitted, or no filtering (nil) when types
+// contains "*".
+func parseNodesSinceTypes(p *[]string) ([]graph.NodeType, *RPCError) {
+	if p == nil {
+		return []graph.NodeType{graph.NodeTypeFinding}, nil
+	}
+	for _, t := range *p {
+		if t == "*" {
+			return nil, nil
+		}
+	}
+	types := make([]graph.NodeType, 0, len(*p))
+	for _, t := range *p {
+		nt := graph.NodeType(t)
+		if !graph.IsValidNodeType(nt) {
+			return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("invalid params: unknown node type %q", t)}
+		}
+		types = append(types, nt)
+	}
+	return types, nil
+}
+
+// parseSort validates the shared sort param used by both
+// read_nodes_since_cursor and read_nodes_since_date, defaulting to
+// ascending (descending=false) when omitted.
+func parseSort(p *string) (descending bool, rpcErr *RPCError) {
+	if p == nil {
+		return false, nil
+	}
+	switch *p {
+	case "ascending":
+		return false, nil
+	case "descending":
+		return true, nil
+	default:
+		return false, &RPCError{Code: -32602, Message: fmt.Sprintf("invalid params: sort must be \"ascending\" or \"descending\", got %q", *p)}
+	}
+}
+
+// parseDate accepts either an RFC3339 timestamp or a plain YYYY-MM-DD date
+// (treated as UTC midnight), the two formats read_nodes_since_date allows.
+func parseDate(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("unrecognized date format %q: want RFC3339 or YYYY-MM-DD", s)
+}
+
+func readNodesSinceCursorHandler(mgr *graph.Manager) handlerFunc {
 	return func(params json.RawMessage) (any, *RPCError) {
 		var p struct {
 			Topic  string    `json:"topic"`
 			Cursor *int64    `json:"cursor"`
 			Limit  *int      `json:"limit"`
 			Types  *[]string `json:"types"`
+			Sort   *string   `json:"sort"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil || p.Topic == "" {
 			return nil, &RPCError{Code: -32602, Message: "invalid params: topic required"}
 		}
 
-		cursor := int64(0)
-		if p.Cursor != nil {
-			cursor = *p.Cursor
+		limit, rpcErr := parseNodesSinceLimit(p.Limit)
+		if rpcErr != nil {
+			return nil, rpcErr
 		}
-
-		limit := 100
-		if p.Limit != nil {
-			if *p.Limit <= 0 || *p.Limit > maxNodesSinceLimit {
-				return nil, &RPCError{Code: -32602, Message: "invalid params: limit must be between 1 and 1000"}
-			}
-			limit = *p.Limit
+		types, rpcErr := parseNodesSinceTypes(p.Types)
+		if rpcErr != nil {
+			return nil, rpcErr
 		}
-
-		var types []graph.NodeType
-		switch {
-		case p.Types == nil:
-			types = []graph.NodeType{graph.NodeTypeFinding}
-		default:
-			wildcard := false
-			for _, t := range *p.Types {
-				if t == "*" {
-					wildcard = true
-					break
-				}
-			}
-			if !wildcard {
-				types = make([]graph.NodeType, 0, len(*p.Types))
-				for _, t := range *p.Types {
-					nt := graph.NodeType(t)
-					if !graph.IsValidNodeType(nt) {
-						return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("invalid params: unknown node type %q", t)}
-					}
-					types = append(types, nt)
-				}
-			}
+		descending, rpcErr := parseSort(p.Sort)
+		if rpcErr != nil {
+			return nil, rpcErr
 		}
 
 		g, err := mgr.Topic(p.Topic)
@@ -106,7 +149,60 @@ func readNodesSinceHandler(mgr *graph.Manager) handlerFunc {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
 
-		summaries := g.NodesSince(cursor, limit, types)
+		cursor := int64(0)
+		if p.Cursor != nil {
+			cursor = *p.Cursor
+			if cursor == -1 {
+				cursor, _, _ = g.Stats()
+			}
+		}
+
+		summaries := g.NodesSince(cursor, limit, types, descending)
+		if summaries == nil {
+			summaries = []graph.NodeSummary{}
+		}
+		data, _ := json.Marshal(summaries)
+		return callToolResult(string(data)), nil
+	}
+}
+
+func readNodesSinceDateHandler(mgr *graph.Manager) handlerFunc {
+	return func(params json.RawMessage) (any, *RPCError) {
+		var p struct {
+			Topic string    `json:"topic"`
+			Date  string    `json:"date"`
+			Limit *int      `json:"limit"`
+			Types *[]string `json:"types"`
+			Sort  *string   `json:"sort"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.Topic == "" || p.Date == "" {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: topic and date required"}
+		}
+
+		date, err := parseDate(p.Date)
+		if err != nil {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: " + err.Error()}
+		}
+
+		limit, rpcErr := parseNodesSinceLimit(p.Limit)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		types, rpcErr := parseNodesSinceTypes(p.Types)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		descending, rpcErr := parseSort(p.Sort)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+
+		g, err2 := mgr.Topic(p.Topic)
+		if err2 != nil {
+			return nil, &RPCError{Code: -32602, Message: err2.Error()}
+		}
+
+		summaries := g.NodesSinceDate(date, limit, types, descending)
 		if summaries == nil {
 			summaries = []graph.NodeSummary{}
 		}

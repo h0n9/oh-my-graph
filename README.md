@@ -101,7 +101,7 @@ Add the following to your Claude Desktop config file (macOS: `~/Library/Applicat
 }
 ```
 
-Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since`, `read_node`, `neighbors`, `write`) will appear automatically.
+Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since_cursor`, `read_nodes_since_date`, `read_node`, `neighbors`, `write`) will appear automatically.
 
 ### Claude Code
 
@@ -135,7 +135,7 @@ At the start of every session, connect to the `oh-my-graph` MCP server:
 
 1. Call `list_topics` to discover existing topics.
 2. Infer the topic from context — working directory name, project name, or the user's first message.
-3. Call `read_nodes_since(<topic>)` (cursor 0) to load existing findings before responding. This defaults to `finding` nodes only — pass `types` (e.g. `["decision"]`) or `types:["*"]` if the session needs decisions, blockers, or questions too.
+3. Call `read_nodes_since_date(<topic>, date: <one week before today>)` to load recent findings before responding — cheaper than a full cold-start `read_nodes_since_cursor` walk from the beginning on large topics. This defaults to `finding` nodes only — pass `types` (e.g. `["decision"]`) or `types:["*"]` if the session needs decisions, blockers, or questions too.
 4. When a node from that skim looks relevant, call `neighbors(<topic>, node_id, depth: 2)` to pull in its graph-local context before deciding whether to spend a full `read_node` call on it.
 
 During the session, call `write` frequently to persist findings, decisions, and artifacts. Link related nodes with edges to preserve reasoning chains.
@@ -313,16 +313,17 @@ Each line is a WAL record:
 
 ## MCP Tools
 
-| Tool               | Signature                                                   | Returns                                                                          |
-| ------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `list_topics`      | `()`                                                        | `[]string`                                                                       |
-| `get_topic`        | `(topic)`                                                   | `{last_cursor, node_count, edge_count}`                                          |
-| `read_nodes_since` | `(topic, cursor?, types?)`                                  | `[]{node_id, type, summary, seq}`                                                |
-| `read_node`        | `(topic, node_id)`                                          | full node + all edges (in & out)                                                 |
-| `neighbors`        | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
-| `write`            | `(topic, nodes[], edges[])`                                 | `{cursor}`                                                                       |
+| Tool                      | Signature                                                   | Returns                                                                          |
+| ------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `list_topics`             | `()`                                                        | `[]string`                                                                       |
+| `get_topic`               | `(topic)`                                                   | `{last_cursor, node_count, edge_count}`                                          |
+| `read_nodes_since_cursor` | `(topic, cursor?, types?, sort?)`                           | `[]{node_id, type, summary, seq}`                                                |
+| `read_nodes_since_date`   | `(topic, date, types?, sort?)`                              | `[]{node_id, type, summary, seq}`                                                |
+| `read_node`               | `(topic, node_id)`                                          | full node + all edges (in & out)                                                 |
+| `neighbors`               | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
+| `write`                   | `(topic, nodes[], edges[])`                                 | `{cursor}`                                                                       |
 
-`cursor` defaults to `0`. `types` defaults to `["finding"]` when omitted; pass `types:["*"]` for every node type, or a specific list to narrow further.
+`cursor` defaults to `0`; pass `-1` to start from the current newest node. `date` accepts an RFC3339 timestamp or a plain `YYYY-MM-DD`. `sort` defaults to `"ascending"`; pass `"descending"` for newest-first (combine with `cursor:-1` on `read_nodes_since_cursor` for "latest N nodes"). `types` defaults to `["finding"]` when omitted; pass `types:["*"]` for every node type, or a specific list to narrow further.
 
 `neighbors` does a BFS traversal from `node_id` out to `depth` hops (1–3, default 1), following `direction` (default `both`) and filtering by `edge_types` (default `["*"]`). Returns summary-level neighbors capped at `limit` (default 50, max 200); `truncated` is `true` if the reachable set exceeded `limit`.
 
@@ -331,7 +332,7 @@ Each line is a WAL record:
 Agents communicate asynchronously via `message` nodes in a shared topic:
 
 1. **Session A** writes a `message` node to topic `"comms"`
-2. **Session B** polls `read_nodes_since("comms", last_cursor, types:["message"])` and sees the message
+2. **Session B** polls `read_nodes_since_cursor("comms", cursor: last_cursor, types:["message"])` and sees the message
 3. **Session B** replies with a new `message` node + `replies_to` edge pointing back
 
 No extra infrastructure needed — the graph is the message bus.
@@ -400,9 +401,9 @@ Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -benc
 
 | Benchmark                           | Scenario                                                                                                     | Time/op | Memory/op | Allocs/op |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------- | --------- | --------- |
-| `BenchmarkNodesSinceRareTypeFilter` | `read_nodes_since` filtered to a single type, with 1 matching node buried behind 50,000 nodes of another type | 57.5 ns | 64 B      | 1         |
-| `BenchmarkNodesSinceWildcard`       | `read_nodes_since` with no type filter, over 50,000 nodes                                                     | 348 ns  | 581 B     | 1         |
-| `BenchmarkNodesSinceMultiType`      | `read_nodes_since` merging 3 types, 10,000 nodes each                                                         | 7.48 µs | 16.0 KB   | 9         |
+| `BenchmarkNodesSinceRareTypeFilter` | `read_nodes_since_cursor` filtered to a single type, with 1 matching node buried behind 50,000 nodes of another type | 57.5 ns | 64 B      | 1         |
+| `BenchmarkNodesSinceWildcard`       | `read_nodes_since_cursor` with no type filter, over 50,000 nodes                                                     | 348 ns  | 581 B     | 1         |
+| `BenchmarkNodesSinceMultiType`      | `read_nodes_since_cursor` merging 3 types, 10,000 nodes each                                                         | 7.48 µs | 16.0 KB   | 9         |
 | `BenchmarkGetNode`                  | `read_node` on a node with 2 edges, in a 10,000-node graph                                                    | 112 ns  | 48 B      | 2         |
 | `BenchmarkNeighborsChain`           | `neighbors` — depth 2, both directions, mid-chain anchor in a 10,000-node chain                               | 1.68 µs | 6.8 KB    | 11        |
 | `BenchmarkNeighborsHub`             | `neighbors` — depth 1 from a hub node with 10,000 outgoing edges, limit 50                                    | 10.7 µs | 24.9 KB   | 23        |
@@ -417,7 +418,7 @@ Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -benc
 | Benchmark                        | Scenario                                                                          | Time/op | Memory/op | Allocs/op |
 | --------------------------------- | ------------------------------------------------------------------------------------ | ------- | --------- | --------- |
 | `BenchmarkWriteHandler`          | `write` tool call — JSON args in, `Write`, JSON result out                        | 7.91 µs | 2.4 KB    | 31        |
-| `BenchmarkReadNodesSinceHandler` | `read_nodes_since` tool call, default filter, over 1,000 seeded nodes             | 17.7 µs | 18.3 KB   | 11        |
+| `BenchmarkReadNodesSinceCursorHandler` | `read_nodes_since_cursor` tool call, default filter, over 1,000 seeded nodes       | 17.7 µs | 18.3 KB   | 11        |
 | `BenchmarkNeighborsHandler`      | `neighbors` tool call — depth 2, limit 50, mid-chain anchor in a 1,000-node chain | 4.30 µs | 8.5 KB    | 22        |
 
 Reproduce locally:

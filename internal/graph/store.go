@@ -43,6 +43,7 @@ var validEdgeTypes = map[EdgeType]bool{
 
 type nodeLogEntry struct {
 	seq    int64
+	ts     time.Time
 	nodeID string
 }
 
@@ -108,10 +109,14 @@ func newTopicGraph(path string) (*TopicGraph, error) {
 	return g, nil
 }
 
-// indexNode records n under both the seq-ordered log and its type's log. Callers
-// must hold g.mu (write lock).
-func (g *TopicGraph) indexNode(seq int64, n *Node) {
-	entry := nodeLogEntry{seq: seq, nodeID: n.NodeID}
+// indexNode records n under both the seq-ordered log and its type's log. ts
+// must be monotonic non-decreasing with seq across calls (true today since
+// Write captures time.Now() inside the same g.mu critical section as the seq
+// allocation) -- read_nodes_since_date's date-to-cursor translation relies on
+// nodeLog staying ts-ordered exactly like it's seq-ordered. Callers must hold
+// g.mu (write lock).
+func (g *TopicGraph) indexNode(seq int64, ts time.Time, n *Node) {
+	entry := nodeLogEntry{seq: seq, ts: ts, nodeID: n.NodeID}
 	g.nodeLog = append(g.nodeLog, entry)
 	g.typeLog[n.Type] = append(g.typeLog[n.Type], entry)
 	g.nodeSeq[n.NodeID] = seq
@@ -130,7 +135,7 @@ func (g *TopicGraph) applyRecord(rec WALRecord) {
 		}
 		if _, exists := g.nodes[n.NodeID]; !exists {
 			g.nodes[n.NodeID] = n
-			g.indexNode(rec.Seq, n)
+			g.indexNode(rec.Seq, rec.TS, n)
 		}
 	case "edge":
 		e := new(Edge)
@@ -276,7 +281,7 @@ func (g *TopicGraph) Write(nodes []*Node, edges []*Edge) (int64, error) {
 			Data: json.RawMessage(data),
 		})
 		g.nodes[n.NodeID] = n
-		g.indexNode(g.headSeq, n)
+		g.indexNode(g.headSeq, now, n)
 	}
 
 	for _, e := range edges {
@@ -340,25 +345,36 @@ func (g *TopicGraph) appendToFile(records []WALRecord) (int64, error) {
 }
 
 // NodesSince returns node summaries with seq > cursor, optionally filtered by
-// type, in ascending seq order, capped at limit. An empty types list matches
-// every type. A single type is served directly from that type's own log
-// (O(log N) to the cursor, O(k) to collect); multiple types are merged across
-// their individual logs in seq order.
-func (g *TopicGraph) NodesSince(cursor int64, limit int, types []NodeType) []NodeSummary {
+// type, capped at limit -- ascending seq order by default, or descending
+// when descending is true. An empty types list matches every type. A single
+// type is served directly from that type's own log (O(log N) to the cursor,
+// O(k) to collect); multiple types are merged across their individual logs
+// in seq order.
+func (g *TopicGraph) NodesSince(cursor int64, limit int, types []NodeType, descending bool) []NodeSummary {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
 	switch len(types) {
 	case 0:
-		return g.sliceFrom(g.nodeLog, cursor, limit)
+		return g.sliceFrom(g.nodeLog, cursor, limit, descending)
 	case 1:
-		return g.sliceFrom(g.typeLog[types[0]], cursor, limit)
+		return g.sliceFrom(g.typeLog[types[0]], cursor, limit, descending)
 	default:
-		return g.mergeTypeLogs(types, cursor, limit)
+		return g.mergeTypeLogs(types, cursor, limit, descending)
 	}
 }
 
-func (g *TopicGraph) sliceFrom(log []nodeLogEntry, cursor int64, limit int) []NodeSummary {
+func summaryFor(g *TopicGraph, entry nodeLogEntry) NodeSummary {
+	n := g.nodes[entry.nodeID]
+	return NodeSummary{
+		NodeID:  n.NodeID,
+		Type:    n.Type,
+		Summary: n.Summary,
+		Seq:     entry.seq,
+	}
+}
+
+func (g *TopicGraph) sliceFrom(log []nodeLogEntry, cursor int64, limit int, descending bool) []NodeSummary {
 	i := sort.Search(len(log), func(i int) bool { return log[i].seq > cursor })
 	remaining := log[i:]
 
@@ -367,14 +383,19 @@ func (g *TopicGraph) sliceFrom(log []nodeLogEntry, cursor int64, limit int) []No
 		capHint = limit
 	}
 	result := make([]NodeSummary, 0, capHint)
+
+	if descending {
+		for j := len(remaining) - 1; j >= 0; j-- {
+			result = append(result, summaryFor(g, remaining[j]))
+			if limit > 0 && len(result) >= limit {
+				break
+			}
+		}
+		return result
+	}
+
 	for _, entry := range remaining {
-		n := g.nodes[entry.nodeID]
-		result = append(result, NodeSummary{
-			NodeID:  n.NodeID,
-			Type:    n.Type,
-			Summary: n.Summary,
-			Seq:     entry.seq,
-		})
+		result = append(result, summaryFor(g, entry))
 		if limit > 0 && len(result) >= limit {
 			break
 		}
@@ -383,24 +404,40 @@ func (g *TopicGraph) sliceFrom(log []nodeLogEntry, cursor int64, limit int) []No
 }
 
 // mergeTypeLogs k-way merges the per-type logs for the requested types,
-// starting each from its own cursor position, in ascending seq order.
-func (g *TopicGraph) mergeTypeLogs(types []NodeType, cursor int64, limit int) []NodeSummary {
+// starting each from its own cursor position, in seq order -- ascending by
+// default, or descending (largest-seq-first) when descending is true.
+func (g *TopicGraph) mergeTypeLogs(types []NodeType, cursor int64, limit int, descending bool) []NodeSummary {
 	logs := make([][]nodeLogEntry, len(types))
+	lo := make([]int, len(types)) // insertion point: first index with seq > cursor
 	idx := make([]int, len(types))
 	for i, t := range types {
 		l := g.typeLog[t]
 		logs[i] = l
-		idx[i] = sort.Search(len(l), func(j int) bool { return l[j].seq > cursor })
+		lo[i] = sort.Search(len(l), func(j int) bool { return l[j].seq > cursor })
+		if descending {
+			idx[i] = len(l) - 1
+		} else {
+			idx[i] = lo[i]
+		}
 	}
 
 	result := make([]NodeSummary, 0)
 	for {
 		best := -1
 		for i := range logs {
-			if idx[i] >= len(logs[i]) {
+			if descending {
+				if idx[i] < lo[i] {
+					continue
+				}
+			} else if idx[i] >= len(logs[i]) {
 				continue
 			}
-			if best == -1 || logs[i][idx[i]].seq < logs[best][idx[best]].seq {
+			switch {
+			case best == -1:
+				best = i
+			case !descending && logs[i][idx[i]].seq < logs[best][idx[best]].seq:
+				best = i
+			case descending && logs[i][idx[i]].seq > logs[best][idx[best]].seq:
 				best = i
 			}
 		}
@@ -408,20 +445,42 @@ func (g *TopicGraph) mergeTypeLogs(types []NodeType, cursor int64, limit int) []
 			break
 		}
 		entry := logs[best][idx[best]]
-		idx[best]++
+		if descending {
+			idx[best]--
+		} else {
+			idx[best]++
+		}
 
-		n := g.nodes[entry.nodeID]
-		result = append(result, NodeSummary{
-			NodeID:  n.NodeID,
-			Type:    n.Type,
-			Summary: n.Summary,
-			Seq:     entry.seq,
-		})
+		result = append(result, summaryFor(g, entry))
 		if limit > 0 && len(result) >= limit {
 			break
 		}
 	}
 	return result
+}
+
+// NodesSinceDate returns node summaries added on or after date, otherwise
+// identical to NodesSince -- it translates date into an equivalent cursor via
+// one binary search over the seq/ts-monotonic nodeLog, then delegates to the
+// same slice/merge machinery.
+func (g *TopicGraph) NodesSinceDate(date time.Time, limit int, types []NodeType, descending bool) []NodeSummary {
+	g.mu.RLock()
+	cursor := g.seqForDateLocked(date)
+	g.mu.RUnlock()
+	return g.NodesSince(cursor, limit, types, descending)
+}
+
+// seqForDateLocked returns the cursor such that "seq > cursor" matches
+// exactly the nodes with ts >= date. Callers must hold g.mu (read or write
+// lock); it does not itself acquire the lock so NodesSinceDate can release
+// it before calling back into NodesSince, which re-acquires it.
+func (g *TopicGraph) seqForDateLocked(date time.Time) int64 {
+	log := g.nodeLog
+	i := sort.Search(len(log), func(i int) bool { return !log[i].ts.Before(date) })
+	if i == 0 {
+		return 0
+	}
+	return log[i-1].seq
 }
 
 func (g *TopicGraph) GetNode(nodeID string) (*NodeWithEdges, bool) {

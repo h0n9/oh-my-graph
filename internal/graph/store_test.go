@@ -4,11 +4,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// writeRawWAL writes hand-constructed WAL lines directly to path, for tests
+// that need controlled timestamps Write() can't provide (it always uses
+// time.Now()).
+func writeRawWAL(t *testing.T, path string, lines []string) {
+	t.Helper()
+	content := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write WAL fixture: %v", err)
+	}
+}
 
 func newTestGraph(t *testing.T) (*TopicGraph, string) {
 	t.Helper()
@@ -54,7 +66,7 @@ func TestNodesSinceSingleTypeMatchesWildcardFilter(t *testing.T) {
 		{NodeID: "f2", Type: NodeTypeFinding, Summary: "f2"},
 	}, nil)
 
-	got := g.NodesSince(0, 100, []NodeType{NodeTypeFinding})
+	got := g.NodesSince(0, 100, []NodeType{NodeTypeFinding}, false)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 finding nodes, got %d: %+v", len(got), got)
 	}
@@ -65,7 +77,7 @@ func TestNodesSinceSingleTypeMatchesWildcardFilter(t *testing.T) {
 	}
 
 	// cursor should skip already-seen entries
-	got2 := g.NodesSince(got[0].Seq, 100, []NodeType{NodeTypeFinding})
+	got2 := g.NodesSince(got[0].Seq, 100, []NodeType{NodeTypeFinding}, false)
 	if len(got2) != 1 || got2[0].NodeID != "f2" {
 		t.Fatalf("expected only f2 after cursor, got %+v", got2)
 	}
@@ -80,7 +92,7 @@ func TestNodesSinceMultiTypeMergePreservesSeqOrder(t *testing.T) {
 		{NodeID: "f2", Type: NodeTypeFinding, Summary: "f2"},
 	}, nil)
 
-	got := g.NodesSince(0, 100, []NodeType{NodeTypeFinding, NodeTypeDecision})
+	got := g.NodesSince(0, 100, []NodeType{NodeTypeFinding, NodeTypeDecision}, false)
 	if len(got) != 3 {
 		t.Fatalf("expected 3 nodes (finding+decision), got %d: %+v", len(got), got)
 	}
@@ -106,9 +118,152 @@ func TestNodesSinceMultiTypeRespectsLimit(t *testing.T) {
 		{NodeID: "f2", Type: NodeTypeFinding, Summary: "f2"},
 	}, nil)
 
-	got := g.NodesSince(0, 2, []NodeType{NodeTypeFinding, NodeTypeDecision})
+	got := g.NodesSince(0, 2, []NodeType{NodeTypeFinding, NodeTypeDecision}, false)
 	if len(got) != 2 {
 		t.Fatalf("expected limit=2 to cap results, got %d: %+v", len(got), got)
+	}
+}
+
+func TestNodesSinceDescendingOrder(t *testing.T) {
+	g, _ := newTestGraph(t)
+	g.Write([]*Node{
+		{NodeID: "f1", Type: NodeTypeFinding, Summary: "f1"},
+		{NodeID: "f2", Type: NodeTypeFinding, Summary: "f2"},
+		{NodeID: "f3", Type: NodeTypeFinding, Summary: "f3"},
+	}, nil)
+
+	got := g.NodesSince(0, 100, []NodeType{NodeTypeFinding}, true)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 nodes, got %d: %+v", len(got), got)
+	}
+	want := []string{"f3", "f2", "f1"}
+	for i, id := range want {
+		if got[i].NodeID != id {
+			t.Fatalf("expected descending order %v, got %+v", want, got)
+		}
+	}
+}
+
+func TestNodesSinceMultiTypeDescendingMergePreservesOrder(t *testing.T) {
+	g, _ := newTestGraph(t)
+	g.Write([]*Node{
+		{NodeID: "d1", Type: NodeTypeDecision, Summary: "d1"},
+		{NodeID: "f1", Type: NodeTypeFinding, Summary: "f1"},
+		{NodeID: "b1", Type: NodeTypeBlocker, Summary: "b1"},
+		{NodeID: "f2", Type: NodeTypeFinding, Summary: "f2"},
+	}, nil)
+
+	got := g.NodesSince(0, 100, []NodeType{NodeTypeFinding, NodeTypeDecision}, true)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 nodes (finding+decision), got %d: %+v", len(got), got)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].Seq >= got[i-1].Seq {
+			t.Fatalf("merged descending results not in descending seq order: %+v", got)
+		}
+	}
+	ids := []string{got[0].NodeID, got[1].NodeID, got[2].NodeID}
+	want := []string{"f2", "f1", "d1"}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("expected order %v, got %v", want, ids)
+		}
+	}
+}
+
+func TestNodesSinceDescendingRespectsLimit(t *testing.T) {
+	g, _ := newTestGraph(t)
+	g.Write([]*Node{
+		{NodeID: "d1", Type: NodeTypeDecision, Summary: "d1"},
+		{NodeID: "f1", Type: NodeTypeFinding, Summary: "f1"},
+		{NodeID: "f2", Type: NodeTypeFinding, Summary: "f2"},
+	}, nil)
+
+	got := g.NodesSince(0, 2, []NodeType{NodeTypeFinding, NodeTypeDecision}, true)
+	if len(got) != 2 {
+		t.Fatalf("expected limit=2 to cap descending results, got %d: %+v", len(got), got)
+	}
+	if got[0].NodeID != "f2" || got[1].NodeID != "f1" {
+		t.Fatalf("expected the 2 newest (descending) [f2 f1], got %+v", got)
+	}
+}
+
+// TestNodesSinceDateFiltersByTimestamp, TestNodesSinceDateBoundaryIsInclusive,
+// TestNodesSinceDateBeforeAllNodesReturnsEverything, and
+// TestNodesSinceDateAfterAllNodesReturnsEmpty use hand-built WAL fixtures
+// (writeRawWAL) since Write() always stamps time.Now() and gives no seam for
+// controlling ts.
+func TestNodesSinceDateFiltersByTimestamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.jsonl")
+	writeRawWAL(t, path, []string{
+		`{"seq":1,"type":"node","ts":"2026-01-01T00:00:00Z","data":{"node_id":"n1","type":"finding","summary":"old"}}`,
+		`{"seq":2,"type":"node","ts":"2026-01-05T00:00:00Z","data":{"node_id":"n2","type":"finding","summary":"mid"}}`,
+		`{"seq":3,"type":"node","ts":"2026-01-10T00:00:00Z","data":{"node_id":"n3","type":"finding","summary":"new"}}`,
+	})
+	g, err := newTopicGraph(path)
+	if err != nil {
+		t.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	got := g.NodesSinceDate(time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), 100, nil, false)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 nodes on/after 2026-01-05, got %d: %+v", len(got), got)
+	}
+	if got[0].NodeID != "n2" || got[1].NodeID != "n3" {
+		t.Fatalf("expected [n2 n3], got %+v", got)
+	}
+}
+
+func TestNodesSinceDateBoundaryIsInclusive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.jsonl")
+	writeRawWAL(t, path, []string{
+		`{"seq":1,"type":"node","ts":"2026-01-05T00:00:00Z","data":{"node_id":"n1","type":"finding","summary":"x"}}`,
+	})
+	g, err := newTopicGraph(path)
+	if err != nil {
+		t.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	got := g.NodesSinceDate(time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), 100, nil, false)
+	if len(got) != 1 {
+		t.Fatalf("expected the node exactly at the query date to be included, got %d: %+v", len(got), got)
+	}
+}
+
+func TestNodesSinceDateBeforeAllNodesReturnsEverything(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.jsonl")
+	writeRawWAL(t, path, []string{
+		`{"seq":1,"type":"node","ts":"2026-01-05T00:00:00Z","data":{"node_id":"n1","type":"finding","summary":"x"}}`,
+		`{"seq":2,"type":"node","ts":"2026-01-06T00:00:00Z","data":{"node_id":"n2","type":"finding","summary":"y"}}`,
+	})
+	g, err := newTopicGraph(path)
+	if err != nil {
+		t.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	got := g.NodesSinceDate(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), 100, nil, false)
+	if len(got) != 2 {
+		t.Fatalf("expected all nodes for a date before everything, got %d: %+v", len(got), got)
+	}
+}
+
+func TestNodesSinceDateAfterAllNodesReturnsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.jsonl")
+	writeRawWAL(t, path, []string{
+		`{"seq":1,"type":"node","ts":"2026-01-05T00:00:00Z","data":{"node_id":"n1","type":"finding","summary":"x"}}`,
+	})
+	g, err := newTopicGraph(path)
+	if err != nil {
+		t.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	got := g.NodesSinceDate(time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), 100, nil, false)
+	if len(got) != 0 {
+		t.Fatalf("expected no nodes for a date after everything, got %d: %+v", len(got), got)
 	}
 }
 
@@ -594,7 +749,7 @@ func BenchmarkNodesSinceRareTypeFilter(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		g.NodesSince(0, 10, []NodeType{NodeTypeDecision})
+		g.NodesSince(0, 10, []NodeType{NodeTypeDecision}, false)
 	}
 }
 
@@ -669,7 +824,7 @@ func BenchmarkNodesSinceWildcard(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		g.NodesSince(0, 10, nil)
+		g.NodesSince(0, 10, nil, false)
 	}
 }
 
@@ -695,7 +850,44 @@ func BenchmarkNodesSinceMultiType(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		g.NodesSince(0, 100, types)
+		g.NodesSince(0, 100, types, false)
+	}
+}
+
+// BenchmarkNodesSinceDateColdStart is read_nodes_since_date's whole reason to
+// exist: on a long-lived topic, jump straight to a recent cutoff instead of
+// paging through everything older first. 50,000 nodes spread across 50
+// staggered days (1,000/day, monotonically increasing -- Write() always
+// advances time, so a real WAL never has out-of-order timestamps), querying
+// for just the last day.
+func BenchmarkNodesSinceDateColdStart(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "graph.jsonl")
+
+	const n = 50000
+	const days = 50
+	const perDay = n / days
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		ts := base.AddDate(0, 0, i/perDay)
+		fmt.Fprintf(&sb, `{"seq":%d,"type":"node","ts":%q,"data":{"node_id":"f%d","type":"finding","summary":"x"}}`+"\n", i+1, ts.Format(time.RFC3339), i)
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		b.Fatalf("write WAL fixture: %v", err)
+	}
+
+	g, err := newTopicGraph(path)
+	if err != nil {
+		b.Fatalf("newTopicGraph: %v", err)
+	}
+	defer g.Close()
+
+	cutoff := base.AddDate(0, 0, days-1)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		g.NodesSinceDate(cutoff, 10, nil, false)
 	}
 }
 
