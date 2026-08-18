@@ -153,7 +153,11 @@ func readNodesSinceCursorHandler(mgr *graph.Manager) handlerFunc {
 		if p.Cursor != nil {
 			cursor = *p.Cursor
 			if cursor == -1 {
-				cursor, _, _ = g.Stats()
+				// -1 is the cold-start sentinel for reading the latest nodes.
+				// NodesSince uses cursor as an exclusive lower bound, so use the
+				// beginning boundary and traverse the matching range newest-first.
+				cursor = 0
+				descending = true
 			}
 		}
 

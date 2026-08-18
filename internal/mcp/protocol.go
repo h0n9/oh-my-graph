@@ -80,7 +80,7 @@ const readNodesSinceCursorSchema = `{
   "type": "object",
   "properties": {
     "topic":  { "type": "string", "description": "Topic name" },
-    "cursor": { "type": "integer", "description": "Sequence number to read after. 0 = beginning. -1 = start from newest node.", "default": 0 },
+    "cursor": { "type": "integer", "description": "Sequence number to read after. 0 = beginning. -1 = return newest nodes first.", "default": 0 },
     "limit":  { "type": "integer", "description": "Maximum number of nodes to return (default: 100; must be between 1 and 1000)", "default": 100, "minimum": 1, "maximum": 1000 },
     "types":  {
       "type": "array",

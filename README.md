@@ -323,7 +323,7 @@ Each line is a WAL record:
 | `neighbors`               | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
 | `write`                   | `(topic, nodes[], edges[])`                                 | `{cursor}`                                                                       |
 
-`cursor` defaults to `0`; pass `-1` to start from the current newest node. `date` accepts an RFC3339 timestamp or a plain `YYYY-MM-DD`. `sort` defaults to `"ascending"`; pass `"descending"` for newest-first (combine with `cursor:-1` on `read_nodes_since_cursor` for "latest N nodes"). `types` defaults to `["finding"]` when omitted; pass `types:["*"]` for every node type, or a specific list to narrow further.
+`cursor` defaults to `0`; pass `-1` to return the newest nodes first (respecting `limit`, regardless of `sort`). `date` accepts an RFC3339 timestamp or a plain `YYYY-MM-DD`. `sort` defaults to `"ascending"`; pass `"descending"` for newest-first with an ordinary cursor. `types` defaults to `["finding"]` when omitted; pass `types:["*"]` for every node type, or a specific list to narrow further.
 
 `neighbors` does a BFS traversal from `node_id` out to `depth` hops (1–3, default 1), following `direction` (default `both`) and filtering by `edge_types` (default `["*"]`). Returns summary-level neighbors capped at `limit` (default 50, max 200); `truncated` is `true` if the reachable set exceeded `limit`.
 

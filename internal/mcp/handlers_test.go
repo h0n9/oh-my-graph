@@ -180,13 +180,25 @@ func TestReadNodesSinceCursorHandler_NegativeOneSentinel(t *testing.T) {
 		t.Fatalf("failed to seed nodes: %v", rpcErr)
 	}
 
-	t.Run("cursor=-1 immediately after a write returns nothing new", func(t *testing.T) {
-		result, rpcErr := call(t, `{"topic": "t1", "cursor": -1}`)
+	t.Run("cursor=-1 returns newest nodes first", func(t *testing.T) {
+		result, rpcErr := call(t, `{"topic": "t1", "cursor": -1, "limit": 1}`)
 		if rpcErr != nil {
 			t.Fatalf("unexpected error: %v", rpcErr)
 		}
-		if got := summariesOf(t, result); len(got) != 0 {
-			t.Fatalf("expected no nodes newer than the current head, got %d: %+v", len(got), got)
+		got := summariesOf(t, result)
+		if len(got) != 1 || got[0].NodeID != "f2" {
+			t.Fatalf("expected exactly [f2], got %+v", got)
+		}
+	})
+
+	t.Run("cursor=-1 overrides ascending sort", func(t *testing.T) {
+		result, rpcErr := call(t, `{"topic": "t1", "cursor": -1, "sort": "ascending"}`)
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %v", rpcErr)
+		}
+		got := summariesOf(t, result)
+		if len(got) != 2 || got[0].NodeID != "f2" || got[1].NodeID != "f1" {
+			t.Fatalf("expected [f2 f1], got %+v", got)
 		}
 	})
 
