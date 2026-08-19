@@ -231,7 +231,7 @@ func (g *TopicGraph) Write(nodes []*Node, edges []*Edge) (int64, error) {
 			g.mu.Unlock()
 			return 0, fmt.Errorf("invalid node type: %q", n.Type)
 		}
-		if n.Confidence < 0 || n.Confidence > 1 {
+		if n.Confidence != nil && (*n.Confidence < 0 || *n.Confidence > 1) {
 			g.mu.Unlock()
 			return 0, fmt.Errorf("node %s: confidence must be between 0 and 1", n.NodeID)
 		}

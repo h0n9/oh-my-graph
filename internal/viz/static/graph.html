@@ -714,7 +714,7 @@ function openDetail(n) {
     html += `<div class="d-description">${escHtml(n.description)}</div>`;
   }
 
-  if (n.confidence) {
+  if (n.confidence != null) {
     html += `<div class="d-section">Confidence</div>
              <div class="d-confidence">${n.confidence}</div>`;
   }

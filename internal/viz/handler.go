@@ -100,11 +100,11 @@ type graphData struct {
 }
 
 type nodeView struct {
-	ID          string  `json:"id"`
-	Type        string  `json:"type"`
-	Summary     string  `json:"summary"`
-	Description string  `json:"description"`
-	Confidence  float64 `json:"confidence"`
+	ID          string   `json:"id"`
+	Type        string   `json:"type"`
+	Summary     string   `json:"summary"`
+	Description string   `json:"description"`
+	Confidence  *float64 `json:"confidence,omitempty"`
 }
 
 type edgeView struct {

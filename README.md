@@ -260,6 +260,7 @@ Open **`http://localhost:7780/`** in your browser to explore the graph visually 
   "confidence": 0.92
 }
 ```
+
 `confidence` is optional. An explicit value of `0` is preserved; when omitted, it is absent from read responses.
 
 | Type       | Purpose                                                |

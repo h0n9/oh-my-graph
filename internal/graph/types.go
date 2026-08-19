@@ -40,7 +40,7 @@ type Node struct {
 	Type        NodeType `json:"type"`
 	Summary     string   `json:"summary"`
 	Description string   `json:"description"`
-	Confidence  float64  `json:"confidence"`
+	Confidence  *float64 `json:"confidence,omitempty"`
 }
 
 type Edge struct {
