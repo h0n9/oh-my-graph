@@ -37,6 +37,7 @@ func (s *Server) registerTools() {
 	register("get_topic", "Get topic metadata including the last cursor, node count, and edge count", getTopicSchema, getTopicHandler(s.manager))
 	register("read_nodes_since_cursor", "Read node summaries by cursor position, oldest-first by default. For cold starts on large topics, use read_nodes_since_date instead.", readNodesSinceCursorSchema, readNodesSinceCursorHandler(s.manager))
 	register("read_nodes_since_date", "Read node summaries added on or after a date. Recommended for cold-start reads on large topics.", readNodesSinceDateSchema, readNodesSinceDateHandler(s.manager))
+	register("read_hub_nodes", "Surface the most-connected nodes for query-independent cold-start exploration; select relevant anchors, then use neighbors for graph-local context and read_node for full details", readHubNodesSchema, readHubNodesHandler(s.manager))
 	register("read_node", "Get a node's full data along with all its edges (incoming and outgoing)", readNodeSchema, readNodeHandler(s.manager))
 	register("neighbors", "Get a node's neighbors via BFS traversal (default depth 1, both directions, all edge types); returns summary-level nodes with hop distance and connecting edge — use for graph-local relevance expansion before read_node", neighborsSchema, neighborsHandler(s.manager))
 	register("write", "Write nodes and/or edges to a topic; creates the topic if it does not exist", writeSchema, writeHandler(s.manager))

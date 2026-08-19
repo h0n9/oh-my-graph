@@ -110,6 +110,23 @@ const readNodesSinceDateSchema = `{
   "required": ["topic", "date"]
 }`
 
+const readHubNodesSchema = `{
+  "type": "object",
+  "properties": {
+    "topic": { "type": "string", "description": "Topic name" },
+    "limit": { "type": "integer", "description": "Maximum number of hub nodes to return (default: 10; must be between 1 and 50)", "default": 10, "minimum": 1, "maximum": 50 },
+    "types": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["*","finding","concept","blocker","question","decision","artifact","entity","event","message"] },
+      "default": ["*"],
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Candidate node types to include. Defaults to [\"*\"] (all types). Connectivity is measured against all node types."
+    }
+  },
+  "required": ["topic"]
+}`
+
 const readNodeSchema = `{
   "type": "object",
   "properties": {

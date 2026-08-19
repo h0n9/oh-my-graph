@@ -9,6 +9,139 @@ import (
 	"github.com/h0n9/oh-my-graph/internal/graph"
 )
 
+func hubNodesOf(t *testing.T, result any) []graph.HubNode {
+	t.Helper()
+	res, ok := result.(*CallToolResult)
+	if !ok {
+		t.Fatalf("expected *CallToolResult, got %T", result)
+	}
+	var hubs []graph.HubNode
+	if err := json.Unmarshal([]byte(res.Content[0].Text), &hubs); err != nil {
+		t.Fatalf("unmarshal hub nodes: %v", err)
+	}
+	return hubs
+}
+
+func TestReadHubNodesHandler(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	writeH := writeHandler(mgr)
+	readH := readHubNodesHandler(mgr)
+
+	seed := `{
+		"topic":"hubs",
+		"nodes":[
+			{"node_id":"decision","type":"decision","summary":"decision","confidence":0},
+			{"node_id":"f1","type":"finding","summary":"finding 1"},
+			{"node_id":"f2","type":"finding","summary":"finding 2"},
+			{"node_id":"alone","type":"finding","summary":"alone"}
+		],
+		"edges":[
+			{"edge_id":"e1","type":"supports","from_node_id":"decision","to_node_id":"f1"},
+			{"edge_id":"e2","type":"supports","from_node_id":"decision","to_node_id":"f2"}
+		]
+	}`
+	if _, rpcErr := writeH(json.RawMessage(seed)); rpcErr != nil {
+		t.Fatalf("seed: %v", rpcErr)
+	}
+
+	result, rpcErr := readH(json.RawMessage(`{"topic":"hubs"}`))
+	if rpcErr != nil {
+		t.Fatalf("read hubs: %v", rpcErr)
+	}
+	hubs := hubNodesOf(t, result)
+	if len(hubs) != 3 || hubs[0].NodeID != "decision" || hubs[0].NeighborCount != 2 {
+		t.Fatalf("unexpected hubs: %+v", hubs)
+	}
+	if hubs[0].Confidence == nil || *hubs[0].Confidence != 0 {
+		t.Fatalf("explicit zero confidence missing: %+v", hubs[0])
+	}
+
+	result, rpcErr = readH(json.RawMessage(`{"topic":"hubs","types":["decision"]}`))
+	if rpcErr != nil {
+		t.Fatalf("filtered hubs: %v", rpcErr)
+	}
+	hubs = hubNodesOf(t, result)
+	if len(hubs) != 1 || hubs[0].NodeID != "decision" {
+		t.Fatalf("unexpected filtered hubs: %+v", hubs)
+	}
+}
+
+func TestReadHubNodesHandlerValidationAndEmptyJSON(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	h := readHubNodesHandler(mgr)
+
+	for name, params := range map[string]string{
+		"missing topic":  `{}`,
+		"zero limit":     `{"topic":"t","limit":0}`,
+		"large limit":    `{"topic":"t","limit":51}`,
+		"empty types":    `{"topic":"t","types":[]}`,
+		"mixed wildcard": `{"topic":"t","types":["*","finding"]}`,
+		"unknown type":   `{"topic":"t","types":["bogus"]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, rpcErr := h(json.RawMessage(params)); rpcErr == nil {
+				t.Fatalf("expected validation error for %s", params)
+			}
+		})
+	}
+
+	result, rpcErr := h(json.RawMessage(`{"topic":"empty","types":["finding","finding"]}`))
+	if rpcErr != nil {
+		t.Fatalf("duplicate named types should be accepted defensively: %v", rpcErr)
+	}
+	res := result.(*CallToolResult)
+	if res.Content[0].Text != "[]" {
+		t.Fatalf("empty payload = %q, want []", res.Content[0].Text)
+	}
+}
+
+func TestReadHubNodesRegistered(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	s := NewServer(mgr)
+	for _, tool := range s.toolDefs {
+		if tool.Name != "read_hub_nodes" {
+			continue
+		}
+		if !strings.Contains(string(tool.InputSchema), `"maximum": 50`) || !strings.Contains(string(tool.InputSchema), `"minItems": 1`) {
+			t.Fatalf("unexpected read_hub_nodes schema: %s", tool.InputSchema)
+		}
+		return
+	}
+	t.Fatal("read_hub_nodes not registered")
+}
+
+func BenchmarkReadHubNodesHandler(b *testing.B) {
+	mgr := graph.NewManager(b.TempDir())
+	defer mgr.Close()
+	g, err := mgr.Topic("bench-hubs")
+	if err != nil {
+		b.Fatal(err)
+	}
+	const nodeCount = 1000
+	nodes := make([]*graph.Node, nodeCount)
+	edges := make([]*graph.Edge, 0, nodeCount-1)
+	for i := range nodes {
+		nodes[i] = &graph.Node{NodeID: fmt.Sprintf("n-%04d", i), Type: graph.NodeTypeFinding, Summary: "node"}
+		if i > 0 {
+			edges = append(edges, &graph.Edge{EdgeID: fmt.Sprintf("e-%04d", i), Type: graph.EdgeTypeReferences, FromNodeID: nodes[i-1].NodeID, ToNodeID: nodes[i].NodeID})
+		}
+	}
+	if _, err := g.Write(nodes, edges); err != nil {
+		b.Fatal(err)
+	}
+	h := readHubNodesHandler(mgr)
+	params := json.RawMessage(`{"topic":"bench-hubs","limit":10}`)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, rpcErr := h(params); rpcErr != nil {
+			b.Fatal(rpcErr)
+		}
+	}
+}
+
 func TestReadNodesSinceCursorHandler_LimitBounds(t *testing.T) {
 	mgr := graph.NewManager(t.TempDir())
 	defer mgr.Close()

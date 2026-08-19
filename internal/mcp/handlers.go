@@ -12,6 +12,7 @@ type handlerFunc func(params json.RawMessage) (any, *RPCError)
 
 const maxNodesSinceLimit = 1000
 const maxNeighborsLimit = 200
+const maxHubNodesLimit = 50
 
 func callToolResult(text string) *CallToolResult {
 	return &CallToolResult{Content: []Content{{Type: "text", Text: text}}}
@@ -211,6 +212,74 @@ func readNodesSinceDateHandler(mgr *graph.Manager) handlerFunc {
 			summaries = []graph.NodeSummary{}
 		}
 		data, _ := json.Marshal(summaries)
+		return callToolResult(string(data)), nil
+	}
+}
+
+func parseHubTypes(p *[]string) ([]graph.NodeType, *RPCError) {
+	if p == nil {
+		return nil, nil
+	}
+	if len(*p) == 0 {
+		return nil, &RPCError{Code: -32602, Message: "invalid params: types must contain at least one item"}
+	}
+
+	hasWildcard := false
+	seen := make(map[graph.NodeType]struct{}, len(*p))
+	types := make([]graph.NodeType, 0, len(*p))
+	for _, value := range *p {
+		if value == "*" {
+			hasWildcard = true
+			continue
+		}
+		t := graph.NodeType(value)
+		if !graph.IsValidNodeType(t) {
+			return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("invalid params: unknown node type %q", value)}
+		}
+		if _, exists := seen[t]; exists {
+			continue
+		}
+		seen[t] = struct{}{}
+		types = append(types, t)
+	}
+	if hasWildcard {
+		if len(*p) != 1 {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: wildcard type cannot be combined with named types"}
+		}
+		return nil, nil
+	}
+	return types, nil
+}
+
+func readHubNodesHandler(mgr *graph.Manager) handlerFunc {
+	return func(params json.RawMessage) (any, *RPCError) {
+		var p struct {
+			Topic string    `json:"topic"`
+			Limit *int      `json:"limit"`
+			Types *[]string `json:"types"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.Topic == "" {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: topic required"}
+		}
+
+		limit := 10
+		if p.Limit != nil {
+			if *p.Limit < 1 || *p.Limit > maxHubNodesLimit {
+				return nil, &RPCError{Code: -32602, Message: "invalid params: limit must be between 1 and 50"}
+			}
+			limit = *p.Limit
+		}
+		types, rpcErr := parseHubTypes(p.Types)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+
+		g, err := mgr.Topic(p.Topic)
+		if err != nil {
+			return nil, &RPCError{Code: -32602, Message: err.Error()}
+		}
+		hubs := g.HubNodes(limit, types)
+		data, _ := json.Marshal(hubs)
 		return callToolResult(string(data)), nil
 	}
 }

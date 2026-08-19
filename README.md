@@ -101,7 +101,7 @@ Add the following to your Claude Desktop config file (macOS: `~/Library/Applicat
 }
 ```
 
-Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since_cursor`, `read_nodes_since_date`, `read_node`, `neighbors`, `write`) will appear automatically.
+Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since_cursor`, `read_nodes_since_date`, `read_hub_nodes`, `read_node`, `neighbors`, `write`) will appear automatically.
 
 ### Claude Code
 
@@ -135,8 +135,8 @@ At the start of every session, connect to the `oh-my-graph` MCP server:
 
 1. Call `list_topics` to discover existing topics.
 2. Infer the topic from context — working directory name, project name, or the user's first message.
-3. Call `read_nodes_since_date(<topic>, date: <one week before today>)` to load recent findings before responding — cheaper than a full cold-start `read_nodes_since_cursor` walk from the beginning on large topics. This defaults to `finding` nodes only — pass `types` (e.g. `["decision"]`) or `types:["*"]` if the session needs decisions, blockers, or questions too.
-4. When a node from that skim looks relevant, call `neighbors(<topic>, node_id, depth: 2)` to pull in its graph-local context before deciding whether to spend a full `read_node` call on it.
+3. With no specific retrieval intent, call `read_hub_nodes(<topic>)` for a compact map of the topic's most-connected nodes. Select relevant anchors from the result.
+4. Call `neighbors(<topic>, node_id, depth: 2)` on selected anchors to pull in graph-local context, then use `read_node` only for the final nodes that need full details. Use `read_nodes_since_date` for time-scoped context or `read_nodes_since_cursor` when resuming from a known checkpoint.
 
 During the session, call `write` frequently to persist findings, decisions, and artifacts. Link related nodes with edges to preserve reasoning chains.
 ```
@@ -260,6 +260,7 @@ Open **`http://localhost:7780/`** in your browser to explore the graph visually 
   "confidence": 0.92
 }
 ```
+`confidence` is optional. An explicit value of `0` is preserved; when omitted, it is absent from read responses.
 
 | Type       | Purpose                                                |
 | ---------- | ------------------------------------------------------ |
@@ -319,6 +320,7 @@ Each line is a WAL record:
 | `get_topic`               | `(topic)`                                                   | `{last_cursor, node_count, edge_count}`                                          |
 | `read_nodes_since_cursor` | `(topic, cursor?, types?, sort?)`                           | `[]{node_id, type, summary, seq}`                                                |
 | `read_nodes_since_date`   | `(topic, date, types?, sort?)`                              | `[]{node_id, type, summary, seq}`                                                |
+| `read_hub_nodes`          | `(topic, limit?, types?)`                                   | `[]{node_id, type, summary, seq, neighbor_count, confidence?}`                   |
 | `read_node`               | `(topic, node_id)`                                          | full node + all edges (in & out)                                                 |
 | `neighbors`               | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
 | `write`                   | `(topic, nodes[], edges[])`                                 | `{cursor}`                                                                       |
@@ -326,6 +328,8 @@ Each line is a WAL record:
 `cursor` defaults to `0`; pass `-1` to return the newest nodes first (respecting `limit`, regardless of `sort`). `date` accepts an RFC3339 timestamp or a plain `YYYY-MM-DD`. `sort` defaults to `"ascending"`; pass `"descending"` for newest-first with an ordinary cursor. `types` defaults to `["finding"]` when omitted; pass `types:["*"]` for every node type, or a specific list to narrow further.
 
 `neighbors` does a BFS traversal from `node_id` out to `depth` hops (1–3, default 1), following `direction` (default `both`) and filtering by `edge_types` (default `["*"]`). Returns summary-level neighbors capped at `limit` (default 50, max 200); `truncated` is `true` if the reachable set exceeded `limit`.
+
+`read_hub_nodes` returns the highest-connectivity nodes for query-independent cold starts (`limit` default 10, max 50; `types` default `["*"]`). Connectivity is the number of distinct neighbors after treating edges as undirected, collapsing parallel/opposite edges, and ignoring self-loops. `types` filters result candidates only; neighbors of every type still contribute to connectivity. Zero-neighbor nodes are omitted, so an edgeless topic returns `[]`. Results are ordered by `neighbor_count` descending, then `seq` descending, then `node_id` ascending. Optional `confidence` is preserved as output metadata but never affects ranking.
 
 ## Messaging
 
@@ -407,6 +411,7 @@ Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -benc
 | `BenchmarkGetNode`                  | `read_node` on a node with 2 edges, in a 10,000-node graph                                                    | 112 ns  | 48 B      | 2         |
 | `BenchmarkNeighborsChain`           | `neighbors` — depth 2, both directions, mid-chain anchor in a 10,000-node chain                               | 1.68 µs | 6.8 KB    | 11        |
 | `BenchmarkNeighborsHub`             | `neighbors` — depth 1 from a hub node with 10,000 outgoing edges, limit 50                                    | 10.7 µs | 24.9 KB   | 23        |
+| `BenchmarkHubNodesSparse`           | `read_hub_nodes` — top 10 from a 10,000-node, 9,999-edge chain                                               | 2.76 ms | 3.68 MB   | 257       |
 | `BenchmarkWriteBatch`               | `write` — single-node batch                                                                                   | 7.34 µs | 1.6 KB    | 11        |
 | `BenchmarkWriteBatchLarge`          | `write` — 50-node batch                                                                                       | 83.9 µs | 68.2 KB   | 362       |
 | `BenchmarkWriteParallel`            | `write` — single-node batches from concurrent callers                                                         | 7.48 µs | 1.2 KB    | 10        |
@@ -419,6 +424,7 @@ Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -benc
 | --------------------------------- | ------------------------------------------------------------------------------------ | ------- | --------- | --------- |
 | `BenchmarkWriteHandler`          | `write` tool call — JSON args in, `Write`, JSON result out                        | 7.91 µs | 2.4 KB    | 31        |
 | `BenchmarkReadNodesSinceCursorHandler` | `read_nodes_since_cursor` tool call, default filter, over 1,000 seeded nodes       | 17.7 µs | 18.3 KB   | 11        |
+| `BenchmarkReadHubNodesHandler`     | `read_hub_nodes` tool call, top 10 from a 1,000-node, 999-edge chain            | 268 µs  | 437 KB    | 46        |
 | `BenchmarkNeighborsHandler`      | `neighbors` tool call — depth 2, limit 50, mid-chain anchor in a 1,000-node chain | 4.30 µs | 8.5 KB    | 22        |
 
 Reproduce locally:

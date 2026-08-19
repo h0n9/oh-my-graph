@@ -64,6 +64,18 @@ type NodeSummary struct {
 	Seq     int64    `json:"seq"`
 }
 
+// HubNode is a summary-level structurally important node returned by
+// TopicGraph.HubNodes. Confidence is output metadata only; it never affects
+// eligibility or ranking.
+type HubNode struct {
+	NodeID        string   `json:"node_id"`
+	Type          NodeType `json:"type"`
+	Summary       string   `json:"summary"`
+	Seq           int64    `json:"seq"`
+	NeighborCount int      `json:"neighbor_count"`
+	Confidence    *float64 `json:"confidence,omitempty"`
+}
+
 func IsValidNodeType(t NodeType) bool {
 	return validNodeTypes[t]
 }
