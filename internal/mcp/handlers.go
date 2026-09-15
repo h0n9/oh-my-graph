@@ -13,6 +13,8 @@ type handlerFunc func(params json.RawMessage) (any, *RPCError)
 const maxNodesSinceLimit = 1000
 const maxNeighborsLimit = 200
 const maxHubNodesLimit = 50
+const maxTagSearchLimit = 200
+const maxListTagsLimit = 1000
 
 func callToolResult(text string) *CallToolResult {
 	return &CallToolResult{Content: []Content{{Type: "text", Text: text}}}
@@ -305,6 +307,75 @@ func readNodeHandler(mgr *graph.Manager) handlerFunc {
 		}
 
 		data, _ := json.Marshal(nwe)
+		return callToolResult(string(data)), nil
+	}
+}
+
+func searchByTagsHandler(mgr *graph.Manager) handlerFunc {
+	return func(params json.RawMessage) (any, *RPCError) {
+		var p struct {
+			Topic string    `json:"topic"`
+			Tags  []string  `json:"tags"`
+			Match *string   `json:"match"`
+			Types *[]string `json:"types"`
+			Limit *int      `json:"limit"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.Topic == "" || len(p.Tags) == 0 {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: topic and at least one tag required"}
+		}
+		if err := graph.ValidateTags(p.Tags); err != nil {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: " + err.Error()}
+		}
+		match := "all"
+		if p.Match != nil {
+			match = *p.Match
+		}
+		if match != "all" && match != "any" {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: match must be \"all\" or \"any\""}
+		}
+		types, rpcErr := parseHubTypes(p.Types)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		limit := 50
+		if p.Limit != nil {
+			if *p.Limit < 1 || *p.Limit > maxTagSearchLimit {
+				return nil, &RPCError{Code: -32602, Message: "invalid params: limit must be between 1 and 200"}
+			}
+			limit = *p.Limit
+		}
+		g, err := mgr.Topic(p.Topic)
+		if err != nil {
+			return nil, &RPCError{Code: -32602, Message: err.Error()}
+		}
+		matches := g.SearchByTags(p.Tags, match, types, limit)
+		data, _ := json.Marshal(matches)
+		return callToolResult(string(data)), nil
+	}
+}
+
+func listTagsHandler(mgr *graph.Manager) handlerFunc {
+	return func(params json.RawMessage) (any, *RPCError) {
+		var p struct {
+			Topic string `json:"topic"`
+			Limit *int   `json:"limit"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.Topic == "" {
+			return nil, &RPCError{Code: -32602, Message: "invalid params: topic required"}
+		}
+		limit := 100
+		if p.Limit != nil {
+			if *p.Limit < 1 || *p.Limit > maxListTagsLimit {
+				return nil, &RPCError{Code: -32602, Message: "invalid params: limit must be between 1 and 1000"}
+			}
+			limit = *p.Limit
+		}
+		g, err := mgr.Topic(p.Topic)
+		if err != nil {
+			return nil, &RPCError{Code: -32602, Message: err.Error()}
+		}
+		counts := g.ListTags(limit)
+		data, _ := json.Marshal(counts)
 		return callToolResult(string(data)), nil
 	}
 }

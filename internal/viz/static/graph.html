@@ -243,6 +243,22 @@
     margin-bottom: 12px;
   }
 
+  #detail .d-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 12px;
+  }
+
+  #detail .d-tag {
+    font-size: 10px;
+    color: var(--fg);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 7px;
+  }
+
   #detail .d-id {
     font-size: 10px;
     color: var(--muted);
@@ -717,6 +733,11 @@ function openDetail(n) {
   if (n.confidence != null) {
     html += `<div class="d-section">Confidence</div>
              <div class="d-confidence">${n.confidence}</div>`;
+  }
+
+  if (n.tags?.length) {
+    html += `<div class="d-section">Tags</div>
+             <div class="d-tags">${n.tags.map(tag => `<span class="d-tag">${escHtml(tag)}</span>`).join('')}</div>`;
   }
 
   if (outgoing.length) {

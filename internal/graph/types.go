@@ -41,6 +41,7 @@ type Node struct {
 	Summary     string   `json:"summary"`
 	Description string   `json:"description"`
 	Confidence  *float64 `json:"confidence,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
 }
 
 type Edge struct {
@@ -62,6 +63,19 @@ type NodeSummary struct {
 	Type    NodeType `json:"type"`
 	Summary string   `json:"summary"`
 	Seq     int64    `json:"seq"`
+}
+
+type TaggedNodeSummary struct {
+	NodeID  string   `json:"node_id"`
+	Type    NodeType `json:"type"`
+	Summary string   `json:"summary"`
+	Seq     int64    `json:"seq"`
+	Tags    []string `json:"tags"`
+}
+
+type TagCount struct {
+	Tag       string `json:"tag"`
+	NodeCount int    `json:"node_count"`
 }
 
 // HubNode is a summary-level structurally important node returned by

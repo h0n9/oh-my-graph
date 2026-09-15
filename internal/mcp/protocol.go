@@ -136,6 +136,35 @@ const readNodeSchema = `{
   "required": ["topic", "node_id"]
 }`
 
+const searchByTagsSchema = `{
+  "type": "object",
+  "properties": {
+    "topic": { "type": "string", "description": "Topic name" },
+    "tags": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+      "description": "Exact flat tags to match"
+    },
+    "match": { "type": "string", "enum": ["all", "any"], "default": "all", "description": "all = AND; any = OR" },
+    "types": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "type": "string", "enum": ["*","finding","concept","blocker","question","decision","artifact","entity","event","message"] },
+      "default": ["*"], "description": "Node types to include"
+    },
+    "limit": { "type": "integer", "default": 50, "minimum": 1, "maximum": 200, "description": "Maximum matching nodes to return" }
+  },
+  "required": ["topic", "tags"]
+}`
+
+const listTagsSchema = `{
+  "type": "object",
+  "properties": {
+    "topic": { "type": "string", "description": "Topic name" },
+    "limit": { "type": "integer", "default": 100, "minimum": 1, "maximum": 1000, "description": "Maximum tags to return" }
+  },
+  "required": ["topic"]
+}`
+
 const neighborsSchema = `{
   "type": "object",
   "properties": {
@@ -167,7 +196,11 @@ const writeSchema = `{
           "type":        { "type": "string", "enum": ["finding","concept","blocker","question","decision","artifact","entity","event","message"] },
           "summary":     { "type": "string" },
           "description": { "type": "string" },
-          "confidence":  { "type": "number", "minimum": 0, "maximum": 1 }
+          "confidence":  { "type": "number", "minimum": 0, "maximum": 1 },
+          "tags": {
+            "type": "array", "maxItems": 16, "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+          }
         },
         "required": ["node_id", "type", "summary"]
       }

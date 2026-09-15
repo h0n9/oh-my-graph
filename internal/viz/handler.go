@@ -105,6 +105,7 @@ type nodeView struct {
 	Summary     string   `json:"summary"`
 	Description string   `json:"description"`
 	Confidence  *float64 `json:"confidence,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
 }
 
 type edgeView struct {
@@ -140,6 +141,7 @@ func (h *Handler) serveGraphData(w http.ResponseWriter, r *http.Request) {
 			Summary:     n.Summary,
 			Description: n.Description,
 			Confidence:  n.Confidence,
+			Tags:        append([]string(nil), n.Tags...),
 		})
 	}
 	for _, e := range edges {

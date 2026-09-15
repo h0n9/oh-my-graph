@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -41,6 +42,28 @@ var validEdgeTypes = map[EdgeType]bool{
 	EdgeTypeDeprecates:  true,
 }
 
+const MaxTagsPerNode = 16
+const MaxTagLength = 32
+
+var tagRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func ValidateTags(tags []string) error {
+	if len(tags) > MaxTagsPerNode {
+		return fmt.Errorf("too many tags: maximum is %d", MaxTagsPerNode)
+	}
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		if len(tag) == 0 || len(tag) > MaxTagLength || !tagRE.MatchString(tag) {
+			return fmt.Errorf("invalid tag %q: must be 1-%d characters and match [a-z0-9]+(-[a-z0-9]+)*", tag, MaxTagLength)
+		}
+		if _, exists := seen[tag]; exists {
+			return fmt.Errorf("duplicate tag %q", tag)
+		}
+		seen[tag] = struct{}{}
+	}
+	return nil
+}
+
 type nodeLogEntry struct {
 	seq    int64
 	ts     time.Time
@@ -69,6 +92,7 @@ type TopicGraph struct {
 	// case for read_nodes_since, which defaults to type=finding) don't need to
 	// linear-scan past every other type to find matches.
 	typeLog map[NodeType][]nodeLogEntry
+	tagLog  map[string][]nodeLogEntry
 	// nodeSeq is a reverse index of indexNode's nodeLog, letting Neighbors
 	// look up a node's seq in O(1) without scanning the log.
 	nodeSeq map[string]int64
@@ -89,6 +113,7 @@ func newTopicGraph(path string) (*TopicGraph, error) {
 		adjOut:  make(map[string][]*Edge),
 		adjIn:   make(map[string][]*Edge),
 		typeLog: make(map[NodeType][]nodeLogEntry),
+		tagLog:  make(map[string][]nodeLogEntry),
 		nodeSeq: make(map[string]int64),
 	}
 	if err := g.load(); err != nil {
@@ -119,6 +144,9 @@ func (g *TopicGraph) indexNode(seq int64, ts time.Time, n *Node) {
 	entry := nodeLogEntry{seq: seq, ts: ts, nodeID: n.NodeID}
 	g.nodeLog = append(g.nodeLog, entry)
 	g.typeLog[n.Type] = append(g.typeLog[n.Type], entry)
+	for _, tag := range n.Tags {
+		g.tagLog[tag] = append(g.tagLog[tag], entry)
+	}
 	g.nodeSeq[n.NodeID] = seq
 }
 
@@ -219,10 +247,15 @@ func (g *TopicGraph) Write(nodes []*Node, edges []*Edge) (int64, error) {
 	// build set of node IDs available after this write (existing + batch)
 	batchNodeIDs := make(map[string]bool, len(nodes))
 	for _, n := range nodes {
+		if batchNodeIDs[n.NodeID] {
+			g.mu.Unlock()
+			return 0, fmt.Errorf("node %s appears more than once in batch", n.NodeID)
+		}
 		batchNodeIDs[n.NodeID] = true
 	}
 
-	for _, n := range nodes {
+	storedNodes := make([]*Node, len(nodes))
+	for i, n := range nodes {
 		if n.NodeID == "" {
 			g.mu.Unlock()
 			return 0, fmt.Errorf("node missing node_id")
@@ -235,6 +268,14 @@ func (g *TopicGraph) Write(nodes []*Node, edges []*Edge) (int64, error) {
 			g.mu.Unlock()
 			return 0, fmt.Errorf("node %s: confidence must be between 0 and 1", n.NodeID)
 		}
+		if err := ValidateTags(n.Tags); err != nil {
+			g.mu.Unlock()
+			return 0, fmt.Errorf("node %s: %w", n.NodeID, err)
+		}
+		// Store an owned copy so callers cannot mutate indexed tags after Write.
+		nodeCopy := *n
+		nodeCopy.Tags = append([]string(nil), n.Tags...)
+		storedNodes[i] = &nodeCopy
 		if _, exists := g.nodes[n.NodeID]; exists {
 			g.mu.Unlock()
 			return 0, fmt.Errorf("node %s already exists", n.NodeID)
@@ -271,7 +312,7 @@ func (g *TopicGraph) Write(nodes []*Node, edges []*Edge) (int64, error) {
 	now := time.Now().UTC()
 	records := make([]WALRecord, 0, len(nodes)+len(edges))
 
-	for _, n := range nodes {
+	for _, n := range storedNodes {
 		g.headSeq++
 		data, _ := json.Marshal(n)
 		records = append(records, WALRecord{
@@ -496,7 +537,9 @@ func (g *TopicGraph) GetNode(nodeID string) (*NodeWithEdges, bool) {
 	edges = append(edges, g.adjOut[nodeID]...)
 	edges = append(edges, g.adjIn[nodeID]...)
 
-	return &NodeWithEdges{Node: n, Edges: edges}, true
+	nodeCopy := *n
+	nodeCopy.Tags = append([]string(nil), n.Tags...)
+	return &NodeWithEdges{Node: &nodeCopy, Edges: edges}, true
 }
 
 type neighborCandidate struct {
@@ -619,7 +662,9 @@ func (g *TopicGraph) Snapshot() ([]*Node, []*Edge) {
 
 	nodes := make([]*Node, 0, len(g.nodes))
 	for _, n := range g.nodes {
-		nodes = append(nodes, n)
+		nodeCopy := *n
+		nodeCopy.Tags = append([]string(nil), n.Tags...)
+		nodes = append(nodes, &nodeCopy)
 	}
 
 	edges := make([]*Edge, 0, len(g.edges))
@@ -695,6 +740,7 @@ func (g *TopicGraph) reloadNewLines() {
 		g.adjIn = make(map[string][]*Edge)
 		g.nodeLog = nil
 		g.typeLog = make(map[NodeType][]nodeLogEntry)
+		g.tagLog = make(map[string][]nodeLogEntry)
 		g.nodeSeq = make(map[string]int64)
 		g.headSeq = 0
 		g.readOffset = 0

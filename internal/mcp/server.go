@@ -39,6 +39,8 @@ func (s *Server) registerTools() {
 	register("read_nodes_since_date", "Read node summaries added on or after a date. Recommended for cold-start reads on large topics.", readNodesSinceDateSchema, readNodesSinceDateHandler(s.manager))
 	register("read_hub_nodes", "Surface the most-connected nodes for query-independent cold-start exploration; select relevant anchors, then use neighbors for graph-local context and read_node for full details", readHubNodesSchema, readHubNodesHandler(s.manager))
 	register("read_node", "Get a node's full data along with all its edges (incoming and outgoing)", readNodeSchema, readNodeHandler(s.manager))
+	register("search_by_tags", "Find newest nodes by exact flat tags; use match=all for AND or match=any for OR, then expand relevant results with neighbors", searchByTagsSchema, searchByTagsHandler(s.manager))
+	register("list_tags", "List the most-used node tags and their node counts for exact-tag discovery", listTagsSchema, listTagsHandler(s.manager))
 	register("neighbors", "Get a node's neighbors via BFS traversal (default depth 1, both directions, all edge types); returns summary-level nodes with hop distance and connecting edge — use for graph-local relevance expansion before read_node", neighborsSchema, neighborsHandler(s.manager))
 	register("write", "Write nodes and/or edges to a topic; creates the topic if it does not exist", writeSchema, writeHandler(s.manager))
 }

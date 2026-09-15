@@ -22,7 +22,7 @@ func writeRawWAL(t *testing.T, path string, lines []string) {
 	}
 }
 
-func newTestGraph(t *testing.T) (*TopicGraph, string) {
+func newTestGraph(t testing.TB) (*TopicGraph, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "graph.jsonl")
 	g, err := newTopicGraph(path)
@@ -291,7 +291,7 @@ func TestReloadPicksUpExternalAppendIncrementally(t *testing.T) {
 	}
 
 	// simulate an external process appending a second record directly to the file
-	rec := `{"seq":2,"type":"node","ts":"2024-01-01T00:00:00Z","data":{"node_id":"n2","type":"finding","summary":"s2"}}` + "\n"
+	rec := `{"seq":2,"type":"node","ts":"2024-01-01T00:00:00Z","data":{"node_id":"n2","type":"finding","summary":"s2","tags":["external"]}}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		t.Fatalf("open for external append: %v", err)
@@ -309,6 +309,9 @@ func TestReloadPicksUpExternalAppendIncrementally(t *testing.T) {
 
 	if _, ok := g.GetNode("n2"); !ok {
 		t.Fatal("expected externally appended node n2 to be picked up by reload")
+	}
+	if got := g.SearchByTags([]string{"external"}, "all", nil, 10); len(got) != 1 || got[0].NodeID != "n2" {
+		t.Fatalf("external tag index = %+v", got)
 	}
 	_, nodeCount, _ := g.Stats()
 	if nodeCount != 2 {
@@ -335,7 +338,7 @@ func TestReloadFromScratchOnTruncation(t *testing.T) {
 	}
 
 	// simulate truncation/rotation: replace the file with a shorter one
-	rec := `{"seq":1,"type":"node","ts":"2024-01-01T00:00:00Z","data":{"node_id":"n3","type":"finding","summary":"s3"}}` + "\n"
+	rec := `{"seq":1,"type":"node","ts":"2024-01-01T00:00:00Z","data":{"node_id":"n3","type":"finding","summary":"s3","tags":["replacement"]}}` + "\n"
 	if err := os.WriteFile(path, []byte(rec), 0644); err != nil {
 		t.Fatalf("truncate/replace file: %v", err)
 	}
@@ -355,6 +358,9 @@ func TestReloadFromScratchOnTruncation(t *testing.T) {
 	}
 	if _, ok := g.GetNode("n1"); ok {
 		t.Fatal("expected stale n1 to be gone after rebuild")
+	}
+	if got := g.SearchByTags([]string{"replacement"}, "all", nil, 10); len(got) != 1 || got[0].NodeID != "n3" {
+		t.Fatalf("rebuilt tag index = %+v", got)
 	}
 }
 

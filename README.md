@@ -101,7 +101,7 @@ Add the following to your Claude Desktop config file (macOS: `~/Library/Applicat
 }
 ```
 
-Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since_cursor`, `read_nodes_since_date`, `read_hub_nodes`, `read_node`, `neighbors`, `write`) will appear automatically.
+Then restart Claude Desktop. The `oh-my-graph` tools (`list_topics`, `get_topic`, `read_nodes_since_cursor`, `read_nodes_since_date`, `read_hub_nodes`, `search_by_tags`, `list_tags`, `read_node`, `neighbors`, `write`) will appear automatically.
 
 ### Claude Code
 
@@ -135,7 +135,7 @@ At the start of every session, connect to the `oh-my-graph` MCP server:
 
 1. Call `list_topics` to discover existing topics.
 2. Infer the topic from context — working directory name, project name, or the user's first message.
-3. With no specific retrieval intent, call `read_hub_nodes(<topic>)` for a compact map of the topic's most-connected nodes. Select relevant anchors from the result.
+3. For exact categorical discovery, call `list_tags(<topic>)`, then `search_by_tags(<topic>, tags: [...])`. With no specific retrieval intent, call `read_hub_nodes(<topic>)` for a compact map of the topic's most-connected nodes.
 4. Call `neighbors(<topic>, node_id, depth: 2)` on selected anchors to pull in graph-local context, then use `read_node` only for the final nodes that need full details. Use `read_nodes_since_date` for time-scoped context or `read_nodes_since_cursor` when resuming from a known checkpoint.
 
 During the session, call `write` frequently to persist findings, decisions, and artifacts. Link related nodes with edges to preserve reasoning chains.
@@ -246,6 +246,7 @@ Knowledge is stored as a graph of **nodes** (facts, concepts, questions, decisio
 ### Graph Visualization
 
 Open **`http://localhost:7780/`** in your browser to explore the graph visually — the topic list shows node/edge counts, and `/graph?topic=<name>` renders a live interactive force-directed graph.
+Selecting a node opens its details, including any tags stored on that node.
 
 ## Data Model
 
@@ -257,11 +258,14 @@ Open **`http://localhost:7780/`** in your browser to explore the graph visually 
   "type": "finding | concept | blocker | question | decision | artifact | entity | event | message",
   "summary": "one-liner",
   "description": "full markdown body",
+  "tags": ["redis", "performance"],
   "confidence": 0.92
 }
 ```
 
 `confidence` is optional. An explicit value of `0` is preserved; when omitted, it is absent from read responses.
+
+`tags` is optional and applies to nodes only. A node may have up to 16 unique exact tags. Each tag is a lowercase ASCII slug of 1–32 characters: letters and digits separated by single hyphens. Tags are not normalized, namespaced, wildcarded, or interpreted as key/value fields.
 
 | Type       | Purpose                                                |
 | ---------- | ------------------------------------------------------ |
@@ -305,7 +309,7 @@ Open **`http://localhost:7780/`** in your browser to explore the graph visually 
 Each line is a WAL record:
 
 ```
-{"seq":1,"type":"node","ts":"2026-06-18T12:00:00Z","data":{"node_id":"550e8400-e29b-41d4-a716-446655440000","type":"finding","summary":"Redis cache hit rate dropped to 40% after v2.3 deploy","description":"After deploying v2.3, Redis cache hit rate fell from 85% to 40%. Root cause: key prefix change in the new config loader.","confidence":0.92}}
+{"seq":1,"type":"node","ts":"2026-06-18T12:00:00Z","data":{"node_id":"550e8400-e29b-41d4-a716-446655440000","type":"finding","summary":"Redis cache hit rate dropped to 40% after v2.3 deploy","description":"After deploying v2.3, Redis cache hit rate fell from 85% to 40%. Root cause: key prefix change in the new config loader.","confidence":0.92,"tags":["redis","performance"]}}
 {"seq":2,"type":"edge","ts":"2026-06-18T12:00:01Z","data":{"edge_id":"660e8400-e29b-41d4-a716-446655440001","type":"causes","from_node_id":"550e8400-e29b-41d4-a716-446655440000","to_node_id":"770e8400-e29b-41d4-a716-446655440002"}}
 ```
 
@@ -322,6 +326,8 @@ Each line is a WAL record:
 | `read_nodes_since_cursor` | `(topic, cursor?, types?, sort?)`                           | `[]{node_id, type, summary, seq}`                                                |
 | `read_nodes_since_date`   | `(topic, date, types?, sort?)`                              | `[]{node_id, type, summary, seq}`                                                |
 | `read_hub_nodes`          | `(topic, limit?, types?)`                                   | `[]{node_id, type, summary, seq, neighbor_count, confidence?}`                   |
+| `search_by_tags`          | `(topic, tags, match?, types?, limit?)`                     | `[]{node_id, type, summary, seq, tags}`                                          |
+| `list_tags`               | `(topic, limit?)`                                           | `[]{tag, node_count}`                                                            |
 | `read_node`               | `(topic, node_id)`                                          | full node + all edges (in & out)                                                 |
 | `neighbors`               | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
 | `write`                   | `(topic, nodes[], edges[])`                                 | `{cursor}`                                                                       |
@@ -331,6 +337,10 @@ Each line is a WAL record:
 `neighbors` does a BFS traversal from `node_id` out to `depth` hops (1–3, default 1), following `direction` (default `both`) and filtering by `edge_types` (default `["*"]`). Returns summary-level neighbors capped at `limit` (default 50, max 200); `truncated` is `true` if the reachable set exceeded `limit`.
 
 `read_hub_nodes` returns the highest-connectivity nodes for query-independent cold starts (`limit` default 10, max 50; `types` default `["*"]`). Connectivity is the number of distinct neighbors after treating edges as undirected, collapsing parallel/opposite edges, and ignoring self-loops. `types` filters result candidates only; neighbors of every type still contribute to connectivity. Zero-neighbor nodes are omitted, so an edgeless topic returns `[]`. Results are ordered by `neighbor_count` descending, then `seq` descending, then `node_id` ascending. Optional `confidence` is preserved as output metadata but never affects ranking.
+
+`search_by_tags` performs exact tag lookup (`match` defaults to `"all"` for AND; use `"any"` for OR). It returns summary-level nodes newest-first, defaults to all node types, and has a default limit of 50 (max 200). `list_tags` returns tags with their node counts, ordered by count descending then tag ascending (default 100, max 1000). Use returned nodes as anchors for `neighbors` and `read_node`.
+
+The in-memory inverted index maps each tag to an append-ordered node posting list. Building it uses `O(total tag assignments)` time and space; appending a node uses `O(tags on the node)`. AND lookup walks the smallest posting list and checks the remaining requested tags. OR lookup merges the requested lists newest-first. Tag listing uses bounded top-K selection over distinct tags.
 
 ## Messaging
 
@@ -413,6 +423,10 @@ Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -benc
 | `BenchmarkNeighborsChain`           | `neighbors` — depth 2, both directions, mid-chain anchor in a 10,000-node chain                               | 1.68 µs | 6.8 KB    | 11        |
 | `BenchmarkNeighborsHub`             | `neighbors` — depth 1 from a hub node with 10,000 outgoing edges, limit 50                                    | 10.7 µs | 24.9 KB   | 23        |
 | `BenchmarkHubNodesSparse`           | `read_hub_nodes` — top 10 from a 10,000-node, 9,999-edge chain                                               | 2.76 ms | 3.68 MB   | 257       |
+| `BenchmarkSearchByTagsSelective`    | `search_by_tags` AND query over 10,000 nodes using a 10-node rare-tag posting list                            | 1.48 µs | 3.0 KB    | 15        |
+| `BenchmarkSearchByTagsCommon`       | `search_by_tags` lookup of a common tag over 10,000 nodes, limited to 50 results                              | 7.07 µs | 12.9 KB   | 57        |
+| `BenchmarkSearchByTagsUnion`        | `search_by_tags` OR query over three 2,500-node posting lists, limited to 50 results                          | 11.2 µs | 16.2 KB   | 65        |
+| `BenchmarkTagIndexBuild`            | rebuild node/type/tag indexes for 10,000 nodes with two tag assignments each                                  | 2.75 ms | 9.43 MB   | 938       |
 | `BenchmarkWriteBatch`               | `write` — single-node batch                                                                                   | 7.34 µs | 1.6 KB    | 11        |
 | `BenchmarkWriteBatchLarge`          | `write` — 50-node batch                                                                                       | 83.9 µs | 68.2 KB   | 362       |
 | `BenchmarkWriteParallel`            | `write` — single-node batches from concurrent callers                                                         | 7.48 µs | 1.2 KB    | 10        |
@@ -427,6 +441,7 @@ Measured on Apple M1 Pro (`go test ./internal/graph/... ./internal/mcp/... -benc
 | `BenchmarkReadNodesSinceCursorHandler` | `read_nodes_since_cursor` tool call, default filter, over 1,000 seeded nodes       | 17.7 µs | 18.3 KB   | 11        |
 | `BenchmarkReadHubNodesHandler`     | `read_hub_nodes` tool call, top 10 from a 1,000-node, 999-edge chain            | 268 µs  | 437 KB    | 46        |
 | `BenchmarkNeighborsHandler`      | `neighbors` tool call — depth 2, limit 50, mid-chain anchor in a 1,000-node chain | 4.30 µs | 8.5 KB    | 22        |
+| `BenchmarkSearchByTagsHandler`    | `search_by_tags` tool call — exact common-tag lookup over 1,000 seeded nodes      | 15.1 µs | 21.4 KB   | 69        |
 
 Reproduce locally:
 
