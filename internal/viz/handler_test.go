@@ -67,3 +67,72 @@ func TestGraphPageRendersTagLabels(t *testing.T) {
 		t.Fatal("graph page does not render tag labels")
 	}
 }
+
+func TestTopicManagementRoutes(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	h := NewHandler(mgr)
+	seed := func() {
+		_, release, err := mgr.OpenTopic("topic", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		release()
+	}
+	seed()
+
+	request := func(method, path, body, fetchSite string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if fetchSite != "" {
+			req.Header.Set("Sec-Fetch-Site", fetchSite)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Fatalf("%s %s = %d, want %d: %s", method, path, rec.Code, want, rec.Body)
+		}
+		return rec
+	}
+	graphInstance := func(name string) string {
+		t.Helper()
+		rec := request("GET", "/api/graph?topic="+name, "", "", 200)
+		var data graphData
+		if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil || data.Instance == "" {
+			t.Fatalf("graph instance: %q, %v", data.Instance, err)
+		}
+		return data.Instance
+	}
+
+	initialInstance := graphInstance("topic")
+	request("GET", "/topics/archive", "", "", 405)
+	request("POST", "/topics/archive", "topic=topic", "cross-site", 403)
+	if graphInstance("topic") != initialInstance {
+		t.Fatal("blocked requests changed graph instance")
+	}
+	request("POST", "/topics/rename", "topic=topic&new_name=invalid+name", "same-origin", 400)
+	request("POST", "/topics/rename", "topic=missing&new_name=missing", "same-origin", 404)
+	if got := request("POST", "/topics/rename", "topic=topic&new_name=renamed", "same-origin", 303).Header().Get("Location"); got != "/" {
+		t.Fatalf("rename redirect: %s", got)
+	}
+	request("GET", "/api/graph?topic=topic", "", "", 404)
+	seed()
+	if graphInstance("topic") == initialInstance {
+		t.Fatal("recreated name reused the old graph instance")
+	}
+
+	request("POST", "/topics/archive", "topic=renamed", "same-origin", 303)
+	request("POST", "/topics/rename", "topic=renamed&new_name=renamed", "same-origin", 409)
+	request("GET", "/api/graph?topic=renamed", "", "", 409)
+	active := request("GET", "/", "", "", 200).Body.String()
+	archive := request("GET", "/?tab=archived", "", "", 200).Body.String()
+	if strings.Contains(active, "topic=renamed") || !strings.Contains(archive, `aria-label="Restore renamed"`) ||
+		strings.Contains(archive, "topic=renamed") {
+		t.Fatal("archived topic must appear only as a restore action")
+	}
+	if got := request("POST", "/topics/restore", "topic=renamed", "same-origin", 303).Header().Get("Location"); got != "/?tab=archived" {
+		t.Fatalf("restore redirect: %s", got)
+	}
+	graphInstance("renamed")
+}

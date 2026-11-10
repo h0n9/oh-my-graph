@@ -51,17 +51,37 @@
     color: var(--muted);
   }
 
+  nav {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 20px;
+  }
+
+  nav a { color: var(--muted); }
+  nav a[aria-current] { color: var(--fg); font-weight: 600; }
+  .error { margin-bottom: 16px; }
+
   ul {
     list-style: none;
     border-top: 1px solid var(--border);
   }
 
+  li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
   li a {
     display: flex;
+    flex: 1 1 240px;
+    flex-wrap: wrap;
     align-items: baseline;
-    gap: 16px;
-    padding: 14px 8px;
-    border-bottom: 1px solid var(--border);
+    gap: 4px 16px;
+    padding: 4px 0;
     text-decoration: none;
     color: var(--link);
     transition: background 0.1s;
@@ -74,6 +94,7 @@
   .topic-name {
     font-weight: 600;
     flex: 1;
+    overflow-wrap: anywhere;
   }
 
   .stats {
@@ -81,23 +102,113 @@
     font-size: 12px;
     white-space: nowrap;
   }
+  .actions {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  button, input, summary {
+    font: inherit;
+    color: var(--fg);
+    background: var(--bg);
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  button, summary { cursor: pointer; }
+  button:hover, summary:hover { background: var(--hover); }
+  .rename-form {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .rename-form input { width: min(18ch, 100%); }
+
+  dialog {
+    margin: auto;
+    max-width: calc(100% - 32px);
+    padding: 20px;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  dialog::backdrop { background: #0008; }
+  dialog .actions { justify-content: flex-end; margin-top: 16px; }
 </style>
 </head>
 <body>
 <h1>oh-my-graph</h1>
-{{if .}}
+<nav aria-label="Topic status">
+  <a href="/"{{if not .Archived}} aria-current="page"{{end}}>Topics</a>
+  <a href="/?tab=archived"{{if .Archived}} aria-current="page"{{end}}>Archived</a>
+</nav>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+{{if .Topics}}
 <ul>
-  {{range .}}
+  {{range .Topics}}
   <li>
+    {{if $.Archived}}
+    <span class="topic-name">{{.Name}}</span>
+    <form action="/topics/restore" method="post">
+      <input type="hidden" name="topic" value="{{.Name}}">
+      <button type="submit" aria-label="Restore {{.Name}}">Restore</button>
+    </form>
+    {{else}}
     <a href="/graph?topic={{.Name}}">
       <span class="topic-name">{{.Name}}</span>
       <span class="stats">{{.NodeCount}} nodes · {{.EdgeCount}} edges</span>
     </a>
+    <div class="actions">
+      <details>
+        <summary aria-label="Rename {{.Name}}">Rename</summary>
+        <form class="rename-form" action="/topics/rename" method="post">
+          <input type="hidden" name="topic" value="{{.Name}}">
+          <label for="name-{{.Name}}">New name</label>
+          <input id="name-{{.Name}}" name="new_name" value="{{.Name}}" required maxlength="64" pattern="[a-zA-Z0-9_\-]+">
+          <button type="submit">Save</button>
+        </form>
+      </details>
+      <button type="button" data-archive="{{.Name}}" aria-label="Archive {{.Name}}">Archive</button>
+    </div>
+    {{end}}
   </li>
   {{end}}
 </ul>
 {{else}}
-<p class="empty">No topics yet.</p>
+<p class="empty">{{if .Archived}}No archived topics.{{else}}No topics yet.{{end}}</p>
+{{end}}
+{{if and .Topics (not .Archived)}}
+<dialog id="archive-dialog" aria-labelledby="archive-title" aria-describedby="archive-description">
+  <h2 id="archive-title"></h2>
+  <p id="archive-description">You can restore this topic from Archived.</p>
+  <form class="actions" action="/topics/archive" method="post">
+    <input type="hidden" name="topic">
+    <button type="submit" formmethod="dialog" autofocus>Cancel</button>
+    <button type="submit">Archive</button>
+  </form>
+</dialog>
+<script>
+const archiveDialog = document.getElementById('archive-dialog');
+const archiveTitle = document.getElementById('archive-title');
+const archiveTopic = archiveDialog.querySelector('input[name=topic]');
+
+document.querySelectorAll('[data-archive]').forEach(button => {
+  button.addEventListener('click', () => {
+    const topic = button.dataset.archive;
+    archiveTitle.textContent = 'Archive "' + topic + '"?';
+    archiveTopic.value = topic;
+    archiveDialog.showModal();
+  });
+});
+</script>
 {{end}}
 </body>
 </html>

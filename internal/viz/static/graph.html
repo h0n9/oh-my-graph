@@ -342,6 +342,8 @@ const SPAWN_JITTER  = 20; // px; avoids exact-coincidence spawns, which are a re
 
 // ── state ────────────────────────────────────────────────────────────────────
 let nodes = [], edges = [];
+let graphInstance, refreshTimer;
+let refreshing = false;
 let sim = null;
 let focusedNodeId  = null;
 let hoveredNodeId  = null; // tracks mouse position regardless of panel state
@@ -353,9 +355,25 @@ function updateStatsLabel() {
     `${nodes.length} nodes · ${edges.length} edges`;
 }
 
-fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
-  .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+function leaveGraph() {
+  clearInterval(refreshTimer);
+  location.replace('/');
+}
+
+async function fetchGraphData() {
+  const response = await fetch(`/api/graph?topic=${encodeURIComponent(topic)}`);
+  if (response.status === 404 || response.status === 409) {
+    leaveGraph();
+    return null;
+  }
+  if (!response.ok) throw new Error(response.statusText);
+  return response.json();
+}
+
+fetchGraphData()
   .then(data => {
+    if (!data) return;
+    graphInstance = data.instance;
     nodes = data.nodes || [];
     edges = data.edges || [];
     updateStatsLabel();
@@ -363,7 +381,7 @@ fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
     initSim();
     render();
     startSim();
-    setInterval(refreshGraph, POLL_INTERVAL_MS);
+    refreshTimer = setInterval(refreshGraph, POLL_INTERVAL_MS);
   })
   .catch(err => {
     document.getElementById('statsLabel').textContent = 'error: ' + err;
@@ -371,11 +389,16 @@ fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
 
 // ── incremental refresh (polling) ─────────────────────────────────────────────
 function refreshGraph() {
-  if (document.hidden) return;
+  if (document.hidden || refreshing) return;
+  refreshing = true;
 
-  fetch(`/api/graph?topic=${encodeURIComponent(topic)}`)
-    .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+  fetchGraphData()
     .then(data => {
+      if (!data) return;
+      if (data.instance !== graphInstance) {
+        leaveGraph();
+        return;
+      }
       const knownNodeIds = new Set(nodes.map(n => n.id));
       const knownEdgeIds = new Set(edges.map(e => e.id));
       const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
@@ -423,7 +446,8 @@ function refreshGraph() {
       }
       if (!sim) startSim();
     })
-    .catch(() => { /* transient poll failure, retry on next interval */ });
+    .catch(() => { /* transient poll failure, retry on next interval */ })
+    .finally(() => { refreshing = false; });
 }
 
 // ── physics ───────────────────────────────────────────────────────────────────
