@@ -70,7 +70,7 @@ OMG_ISSUER=https://your-public-base-url
 OMG_OWNER_PASSPHRASE=<a-secret-only-you-know>
 ```
 
-This turns on a full OAuth 2.1 Authorization Code + PKCE flow with Dynamic Client Registration — MCP clients self-register and your browser prompts once for the passphrase; bearer tokens on `/mcp` and `/omg-mcp` authorize every call after that. The web visualization UI (`/` and `/graph`) is protected separately, gated by the same passphrase via an in-app `/login` page (a session cookie, not a browser Basic Auth prompt).
+This turns on a full OAuth 2.1 Authorization Code + PKCE flow with Dynamic Client Registration — MCP clients self-register and your browser prompts once for the passphrase; bearer tokens on `/mcp` and `/omg-mcp` authorize every call after that. The web UI, including topic management, uses a separate session cookie issued by the in-app `/login` page after you enter the same passphrase.
 
 **Recommendation:** treat any non-localhost binding as a public endpoint by default and require `--auth`, paired with standard network hygiene — HTTPS termination via reverse proxy, firewall rules limiting source IPs.
 
@@ -133,8 +133,8 @@ claude mcp add oh-my-graph --transport http --scope user http://localhost:7780/m
 
 At the start of every session, connect to the `oh-my-graph` MCP server:
 
-1. Call `list_topics` to discover existing topics.
-2. Infer the topic from context — working directory name, project name, or the user's first message.
+1. Call `list_topics` to discover topic names.
+2. Pick a topic based on the working directory, project name, or the user's first message. If it exists, check `get_topic` and skip it if it returns `archived: true`.
 3. For exact categorical discovery, call `list_tags(<topic>)`, then `search_by_tags(<topic>, tags: [...])`. With no specific retrieval intent, call `read_hub_nodes(<topic>)` for a compact map of the topic's most-connected nodes.
 4. Call `neighbors(<topic>, node_id, depth: 2)` on selected anchors to pull in graph-local context, then use `read_node` only for the final nodes that need full details. Use `read_nodes_since_date` for time-scoped context or `read_nodes_since_cursor` when resuming from a known checkpoint.
 
@@ -245,8 +245,9 @@ Knowledge is stored as a graph of **nodes** (facts, concepts, questions, decisio
 
 ### Graph Visualization
 
-Open **`http://localhost:7780/`** in your browser to explore the graph visually — the topic list shows node/edge counts, and `/graph?topic=<name>` renders a live interactive force-directed graph.
-Selecting a node opens its details, including any tags stored on that node.
+Open **`http://localhost:7780/`** in your browser to explore the graph visually — the topic list shows node/edge counts, and `/graph?topic=<name>` renders a live interactive force-directed graph. Selecting a node opens its details, including any tags stored on that node.
+
+Use the **pencil icon** to rename a topic or the **archive box icon** to archive it. Archiving preserves the graph and reserves its name while hiding the topic from **Topics**. Open **Archived** and select **Restore** to make it active again.
 
 ## Data Model
 
@@ -322,7 +323,7 @@ Each line is a WAL record:
 | Tool                      | Signature                                                   | Returns                                                                          |
 | ------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `list_topics`             | `()`                                                        | `[]string`                                                                       |
-| `get_topic`               | `(topic)`                                                   | `{last_cursor, node_count, edge_count}`                                          |
+| `get_topic`               | `(topic)`                                                   | `{last_cursor, node_count, edge_count}` or `{archived: true}`                       |
 | `read_nodes_since_cursor` | `(topic, cursor?, types?, sort?)`                           | `[]{node_id, type, summary, seq}`                                                |
 | `read_nodes_since_date`   | `(topic, date, types?, sort?)`                              | `[]{node_id, type, summary, seq}`                                                |
 | `read_hub_nodes`          | `(topic, limit?, types?)`                                   | `[]{node_id, type, summary, seq, neighbor_count, confidence?}`                   |
@@ -331,6 +332,8 @@ Each line is a WAL record:
 | `read_node`               | `(topic, node_id)`                                          | full node + all edges (in & out)                                                 |
 | `neighbors`               | `(topic, node_id, depth?, direction?, edge_types?, limit?)` | `{anchor, neighbors: []{node_id, type, summary, seq, hop, via_edge}, truncated}` |
 | `write`                   | `(topic, nodes[], edges[])`                                 | `{cursor}`                                                                       |
+
+`list_topics` includes both active and archived names. `get_topic` returns only `{"archived":true}` for an archived topic. Graph reads and writes require an active topic. Reads of missing topics return an error. A write can create a new topic, including under a name freed by renaming.
 
 `cursor` defaults to `0`; pass `-1` to return the newest nodes first (respecting `limit`, regardless of `sort`). `date` accepts an RFC3339 timestamp or a plain `YYYY-MM-DD`. `sort` defaults to `"ascending"`; pass `"descending"` for newest-first with an ordinary cursor. `types` defaults to `["finding"]` when omitted; pass `types:["*"]` for every node type, or a specific list to narrow further.
 

@@ -3,6 +3,7 @@ package graph
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -82,6 +83,8 @@ type TopicGraph struct {
 	fileMu sync.Mutex
 	wg     sync.WaitGroup
 
+	instance string
+
 	path    string
 	nodes   map[string]*Node
 	edges   map[string]*Edge
@@ -100,13 +103,16 @@ type TopicGraph struct {
 	// readOffset is the byte offset up to which the WAL file has been fully
 	// parsed into memory. It lets reloadNewLines resume from where it left off
 	// instead of rescanning the entire file on every change notification.
-	readOffset int64
-	walFile    *os.File
-	watcher    *fsnotify.Watcher
+	readOffset  int64
+	walFile     *os.File
+	watcher     *fsnotify.Watcher
+	watcherDone chan struct{}
 }
 
 func newTopicGraph(path string) (*TopicGraph, error) {
 	g := &TopicGraph{
+		instance: rand.Text(),
+
 		path:    path,
 		nodes:   make(map[string]*Node),
 		edges:   make(map[string]*Edge),
@@ -133,6 +139,8 @@ func newTopicGraph(path string) (*TopicGraph, error) {
 	}
 	return g, nil
 }
+
+func (g *TopicGraph) Instance() string { return g.instance }
 
 // indexNode records n under both the seq-ordered log and its type's log. ts
 // must be monotonic non-decreasing with seq across calls (true today since
@@ -691,7 +699,9 @@ func (g *TopicGraph) startWatcher() error {
 		return err
 	}
 	g.watcher = w
+	g.watcherDone = make(chan struct{})
 	go func() {
+		defer close(g.watcherDone)
 		for {
 			select {
 			case event, ok := <-w.Events:
@@ -761,6 +771,7 @@ func (g *TopicGraph) reloadNewLines() {
 func (g *TopicGraph) Close() {
 	if g.watcher != nil {
 		g.watcher.Close()
+		<-g.watcherDone
 	}
 	g.wg.Wait()
 	if g.walFile != nil {

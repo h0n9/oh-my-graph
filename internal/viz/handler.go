@@ -3,7 +3,9 @@ package viz
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"html/template"
+	"log"
 	"net/http"
 
 	"github.com/h0n9/oh-my-graph/internal/graph"
@@ -20,12 +22,19 @@ type topicInfo struct {
 	EdgeCount int
 }
 
+type indexView struct {
+	Archived bool
+	Error    string
+	Topics   []topicInfo
+}
+
 type Handler struct {
 	manager *graph.Manager
+	csrf    *http.CrossOriginProtection
 }
 
 func NewHandler(mgr *graph.Manager) *Handler {
-	return &Handler{manager: mgr}
+	return &Handler{manager: mgr, csrf: http.NewCrossOriginProtection()}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -34,11 +43,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/", "":
-		h.serveIndex(w, r)
+		h.serveIndex(w, r.URL.Query().Get("tab") == "archived", http.StatusOK, "")
 	case "/graph":
 		http.ServeFileFS(w, r, staticFS, "static/graph.html")
 	case "/api/graph":
 		h.serveGraphData(w, r)
+	case "/topics/rename", "/topics/archive", "/topics/restore":
+		h.changeTopic(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -78,25 +89,98 @@ func PWAAssets() http.Handler {
 	})
 }
 
-func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
-	names := h.manager.Topics()
-	infos := make([]topicInfo, 0, len(names))
-	for _, name := range names {
-		g, err := h.manager.Topic(name)
-		if err != nil {
+func (h *Handler) serveIndex(w http.ResponseWriter, archived bool, status int, message string) {
+	view := indexView{Archived: archived, Error: message}
+	topics, err := h.manager.Topics()
+	if err != nil {
+		log.Printf("oh-my-graph: list topics: %v", err)
+		status = http.StatusInternalServerError
+		view.Error = "Could not load topics."
+	}
+	for _, topic := range topics {
+		if topic.Archived != archived {
 			continue
 		}
-		_, nodeCount, edgeCount := g.Stats()
-		infos = append(infos, topicInfo{Name: name, NodeCount: nodeCount, EdgeCount: edgeCount})
+		info := topicInfo{Name: topic.Name}
+		if !archived {
+			g, release, err := h.manager.OpenTopic(topic.Name, false)
+			if err != nil {
+				continue
+			}
+			_, info.NodeCount, info.EdgeCount = g.Stats()
+			release()
+		}
+		view.Topics = append(view.Topics, info)
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	indexTmpl.Execute(w, infos)
+	w.WriteHeader(status)
+	if err := indexTmpl.Execute(w, view); err != nil {
+		log.Printf("oh-my-graph: render topics: %v", err)
+	}
+}
+
+func topicErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, graph.ErrInvalidTopicName):
+		return http.StatusBadRequest
+	case errors.Is(err, graph.ErrTopicNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, graph.ErrTopicArchived), errors.Is(err, graph.ErrTopicConflict):
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func (h *Handler) changeTopic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := h.csrf.Check(r); err != nil {
+		http.Error(w, "cross-origin topic changes are forbidden", http.StatusForbidden)
+		return
+	}
+	archived := r.URL.Path == "/topics/restore"
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if err := r.ParseForm(); err != nil {
+		h.serveIndex(w, archived, http.StatusBadRequest, "Invalid topic form.")
+		return
+	}
+
+	topic := r.PostForm.Get("topic")
+	var err error
+	switch r.URL.Path {
+	case "/topics/rename":
+		err = h.manager.RenameTopic(topic, r.PostForm.Get("new_name"))
+	case "/topics/archive":
+		err = h.manager.ArchiveTopic(topic)
+	case "/topics/restore":
+		err = h.manager.RestoreTopic(topic)
+	}
+	if err != nil {
+		status, message := topicErrorStatus(err), err.Error()
+		if status == http.StatusInternalServerError {
+			log.Printf("oh-my-graph: %s: %v", r.URL.Path, err)
+			message = "Could not update topic."
+		}
+		h.serveIndex(w, archived, status, message)
+		return
+	}
+	target := "/"
+	if archived {
+		target = "/?tab=archived"
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 type graphData struct {
-	Nodes []nodeView `json:"nodes"`
-	Edges []edgeView `json:"edges"`
+	Instance string     `json:"instance"`
+	Nodes    []nodeView `json:"nodes"`
+	Edges    []edgeView `json:"edges"`
 }
 
 type nodeView struct {
@@ -116,23 +200,32 @@ type edgeView struct {
 }
 
 func (h *Handler) serveGraphData(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	topic := r.URL.Query().Get("topic")
 	if topic == "" {
 		http.Error(w, "topic required", http.StatusBadRequest)
 		return
 	}
 
-	g, err := h.manager.Topic(topic)
+	g, release, err := h.manager.OpenTopic(topic, false)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status, message := topicErrorStatus(err), err.Error()
+		if status == http.StatusInternalServerError {
+			log.Printf("oh-my-graph: load graph: %v", err)
+			message = "Could not load graph."
+		}
+		http.Error(w, message, status)
 		return
 	}
 
 	nodes, edges := g.Snapshot()
+	instance := g.Instance()
+	release()
 
 	data := graphData{
-		Nodes: make([]nodeView, 0, len(nodes)),
-		Edges: make([]edgeView, 0, len(edges)),
+		Instance: instance,
+		Nodes:    make([]nodeView, 0, len(nodes)),
+		Edges:    make([]edgeView, 0, len(edges)),
 	}
 	for _, n := range nodes {
 		data.Nodes = append(data.Nodes, nodeView{

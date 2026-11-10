@@ -87,6 +87,9 @@ func TestReadHubNodesHandlerValidationAndEmptyJSON(t *testing.T) {
 		})
 	}
 
+	if _, rpcErr := writeHandler(mgr)(json.RawMessage(`{"topic":"empty"}`)); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
 	result, rpcErr := h(json.RawMessage(`{"topic":"empty","types":["finding","finding"]}`))
 	if rpcErr != nil {
 		t.Fatalf("duplicate named types should be accepted defensively: %v", rpcErr)
@@ -116,7 +119,7 @@ func TestReadHubNodesRegistered(t *testing.T) {
 func BenchmarkReadHubNodesHandler(b *testing.B) {
 	mgr := graph.NewManager(b.TempDir())
 	defer mgr.Close()
-	g, err := mgr.Topic("bench-hubs")
+	g, release, err := mgr.OpenTopic("bench-hubs", true)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -129,7 +132,9 @@ func BenchmarkReadHubNodesHandler(b *testing.B) {
 			edges = append(edges, &graph.Edge{EdgeID: fmt.Sprintf("e-%04d", i), Type: graph.EdgeTypeReferences, FromNodeID: nodes[i-1].NodeID, ToNodeID: nodes[i].NodeID})
 		}
 	}
-	if _, err := g.Write(nodes, edges); err != nil {
+	_, err = g.Write(nodes, edges)
+	release()
+	if err != nil {
 		b.Fatal(err)
 	}
 	h := readHubNodesHandler(mgr)
@@ -145,6 +150,9 @@ func BenchmarkReadHubNodesHandler(b *testing.B) {
 func TestReadNodesSinceCursorHandler_LimitBounds(t *testing.T) {
 	mgr := graph.NewManager(t.TempDir())
 	defer mgr.Close()
+	if _, rpcErr := writeHandler(mgr)(json.RawMessage(`{"topic":"t1"}`)); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
 	handler := readNodesSinceCursorHandler(mgr)
 
 	call := func(t *testing.T, params string) (any, *RPCError) {
@@ -191,6 +199,9 @@ func TestReadNodesSinceCursorHandler_LimitBounds(t *testing.T) {
 func TestReadNodesSinceCursorHandler_TypesFilter(t *testing.T) {
 	mgr := graph.NewManager(t.TempDir())
 	defer mgr.Close()
+	if _, rpcErr := writeHandler(mgr)(json.RawMessage(`{"topic":"t1"}`)); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
 	readHandler := readNodesSinceCursorHandler(mgr)
 	writeH := writeHandler(mgr)
 
@@ -726,4 +737,58 @@ func BenchmarkNeighborsHandler(b *testing.B) {
 			b.Fatalf("neighbors: %v", rpcErr)
 		}
 	}
+}
+
+func TestArchivedTopicContract(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	server := NewServer(mgr)
+	call := func(tool, input, want string) {
+		t.Helper()
+		result, rpcErr := server.handlers[tool](json.RawMessage(input))
+		if rpcErr != nil {
+			t.Fatal(rpcErr)
+		}
+		if got := toolText(t, result); got != want {
+			t.Fatalf("%s = %s, want %s", tool, got, want)
+		}
+	}
+	call("list_topics", "{}", "[]")
+	call("write", `{"topic":"active"}`, `{"cursor":0}`)
+	call("write", `{"topic":"archived"}`, `{"cursor":0}`)
+	if err := mgr.ArchiveTopic("archived"); err != nil {
+		t.Fatal(err)
+	}
+	call("list_topics", "{}", `["active","archived"]`)
+	call("get_topic", `{"topic":"active"}`, `{"edge_count":0,"last_cursor":0,"node_count":0}`)
+	call("get_topic", `{"topic":"archived"}`, `{"archived":true}`)
+
+	for tool, fields := range map[string]string{
+		"read_hub_nodes":          "",
+		"read_nodes_since_cursor": "",
+		"read_nodes_since_date":   `,"date":"2026-01-01"`,
+		"read_node":               `,"node_id":"node"`,
+		"neighbors":               `,"node_id":"node"`,
+		"search_by_tags":          `,"tags":["tag"]`,
+		"list_tags":               "",
+		"write":                   "",
+	} {
+		_, rpcErr := server.handlers[tool](json.RawMessage(`{"topic":"archived"` + fields + `}`))
+		if rpcErr == nil || !strings.Contains(rpcErr.Message, "topic is archived") {
+			t.Errorf("%s: expected archived error, got %v", tool, rpcErr)
+		}
+	}
+
+	if err := mgr.RenameTopic("active", "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"get_topic", "read_nodes_since_cursor"} {
+		_, rpcErr := server.handlers[tool](json.RawMessage(`{"topic":"active"}`))
+		if rpcErr == nil || !strings.Contains(rpcErr.Message, "topic not found") {
+			t.Errorf("%s: expected missing topic error, got %v", tool, rpcErr)
+		}
+	}
+	call("list_topics", "{}", `["archived","renamed"]`)
+	call("write", `{"topic":"active"}`, `{"cursor":0}`)
+	call("list_topics", "{}", `["active","archived","renamed"]`)
 }

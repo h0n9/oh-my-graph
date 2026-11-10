@@ -387,7 +387,12 @@ func (s *Server) RequireOwnerSession(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		q := url.Values{"next": {r.URL.RequestURI()}}
+		nextURL := r.URL.RequestURI()
+		if r.Method == http.MethodPost {
+			// Return to the list after login. The form must be resubmitted.
+			nextURL = "/"
+		}
+		q := url.Values{"next": {nextURL}}
 		http.Redirect(w, r, "/login?"+q.Encode(), http.StatusFound)
 	})
 }

@@ -364,3 +364,21 @@ func readBody(t *testing.T, resp *http.Response) string {
 	}
 	return string(b)
 }
+
+func TestExpiredSessionTopicFormReturnsToListAfterLogin(t *testing.T) {
+	srv := newTestServer(t, testConfig(t.TempDir(), "secret"))
+	srv.mu.Lock()
+	srv.sessions["expired-session"] = time.Now().Add(-time.Hour)
+	srv.mu.Unlock()
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("expired session reached the mutation handler")
+	})
+	req := httptest.NewRequest(http.MethodPost, "/topics/archive", strings.NewReader("topic=example"))
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "expired-session"})
+	rec := httptest.NewRecorder()
+	srv.RequireOwnerSession(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login?next=%2F" {
+		t.Fatalf("status = %d, Location = %q", rec.Code, rec.Header().Get("Location"))
+	}
+}

@@ -85,7 +85,9 @@ func main() {
 		Handler: mux,
 	}
 
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
@@ -101,6 +103,7 @@ func main() {
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("oh-my-graph: %v", err)
 	}
+	<-shutdownDone
 }
 
 func resolveDir(data string) string {
