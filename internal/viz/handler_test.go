@@ -12,7 +12,7 @@ import (
 func TestGraphDataIncludesNodeTagsOnly(t *testing.T) {
 	mgr := graph.NewManager(t.TempDir())
 	defer mgr.Close()
-	g, err := mgr.Topic("tags")
+	g, release, err := mgr.OpenTopic("tags", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,6 +23,7 @@ func TestGraphDataIncludesNodeTagsOnly(t *testing.T) {
 		},
 		[]*graph.Edge{{EdgeID: "e", Type: graph.EdgeTypeReferences, FromNodeID: "a", ToNodeID: "b"}},
 	)
+	release()
 	if err != nil {
 		t.Fatal(err)
 	}

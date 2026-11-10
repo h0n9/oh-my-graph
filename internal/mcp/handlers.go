@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -22,11 +23,15 @@ func callToolResult(text string) *CallToolResult {
 
 func listTopicsHandler(mgr *graph.Manager) handlerFunc {
 	return func(_ json.RawMessage) (any, *RPCError) {
-		topics := mgr.Topics()
-		if topics == nil {
-			topics = []string{}
+		topics, err := mgr.Topics()
+		if err != nil {
+			return nil, &RPCError{Code: -32603, Message: err.Error()}
 		}
-		data, _ := json.Marshal(topics)
+		names := make([]string, 0, len(topics))
+		for _, topic := range topics {
+			names = append(names, topic.Name)
+		}
+		data, _ := json.Marshal(names)
 		return callToolResult(string(data)), nil
 	}
 }
@@ -40,10 +45,14 @@ func getTopicHandler(mgr *graph.Manager) handlerFunc {
 			return nil, &RPCError{Code: -32602, Message: "invalid params: topic required"}
 		}
 
-		g, err := mgr.Topic(p.Topic)
+		g, release, err := mgr.OpenTopic(p.Topic, false)
+		if errors.Is(err, graph.ErrTopicArchived) {
+			return callToolResult(`{"archived":true}`), nil
+		}
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
+		defer release()
 
 		lastCursor, nodeCount, edgeCount := g.Stats()
 		result := map[string]any{
@@ -147,10 +156,11 @@ func readNodesSinceCursorHandler(mgr *graph.Manager) handlerFunc {
 			return nil, rpcErr
 		}
 
-		g, err := mgr.Topic(p.Topic)
+		g, release, err := mgr.OpenTopic(p.Topic, false)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
+		defer release()
 
 		cursor := int64(0)
 		if p.Cursor != nil {
@@ -204,10 +214,11 @@ func readNodesSinceDateHandler(mgr *graph.Manager) handlerFunc {
 			return nil, rpcErr
 		}
 
-		g, err2 := mgr.Topic(p.Topic)
+		g, release, err2 := mgr.OpenTopic(p.Topic, false)
 		if err2 != nil {
 			return nil, &RPCError{Code: -32602, Message: err2.Error()}
 		}
+		defer release()
 
 		summaries := g.NodesSinceDate(date, limit, types, descending)
 		if summaries == nil {
@@ -276,10 +287,11 @@ func readHubNodesHandler(mgr *graph.Manager) handlerFunc {
 			return nil, rpcErr
 		}
 
-		g, err := mgr.Topic(p.Topic)
+		g, release, err := mgr.OpenTopic(p.Topic, false)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
+		defer release()
 		hubs := g.HubNodes(limit, types)
 		data, _ := json.Marshal(hubs)
 		return callToolResult(string(data)), nil
@@ -296,10 +308,11 @@ func readNodeHandler(mgr *graph.Manager) handlerFunc {
 			return nil, &RPCError{Code: -32602, Message: "invalid params: topic and node_id required"}
 		}
 
-		g, err := mgr.Topic(p.Topic)
+		g, release, err := mgr.OpenTopic(p.Topic, false)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
+		defer release()
 
 		nwe, ok := g.GetNode(p.NodeID)
 		if !ok {
@@ -344,10 +357,11 @@ func searchByTagsHandler(mgr *graph.Manager) handlerFunc {
 			}
 			limit = *p.Limit
 		}
-		g, err := mgr.Topic(p.Topic)
+		g, release, err := mgr.OpenTopic(p.Topic, false)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
+		defer release()
 		matches := g.SearchByTags(p.Tags, match, types, limit)
 		data, _ := json.Marshal(matches)
 		return callToolResult(string(data)), nil
@@ -370,10 +384,11 @@ func listTagsHandler(mgr *graph.Manager) handlerFunc {
 			}
 			limit = *p.Limit
 		}
-		g, err := mgr.Topic(p.Topic)
+		g, release, err := mgr.OpenTopic(p.Topic, false)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
+		defer release()
 		counts := g.ListTags(limit)
 		data, _ := json.Marshal(counts)
 		return callToolResult(string(data)), nil
@@ -439,10 +454,11 @@ func neighborsHandler(mgr *graph.Manager) handlerFunc {
 			limit = *p.Limit
 		}
 
-		g, err := mgr.Topic(p.Topic)
+		g, release, err := mgr.OpenTopic(p.Topic, false)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
+		defer release()
 
 		result, ok := g.Neighbors(p.NodeID, depth, direction, edgeTypes, limit)
 		if !ok {
@@ -471,10 +487,11 @@ func writeHandler(mgr *graph.Manager) handlerFunc {
 			p.Edges = []*graph.Edge{}
 		}
 
-		g, err := mgr.Topic(p.Topic)
+		g, release, err := mgr.OpenTopic(p.Topic, true)
 		if err != nil {
 			return nil, &RPCError{Code: -32602, Message: err.Error()}
 		}
+		defer release()
 
 		cursor, err := g.Write(p.Nodes, p.Edges)
 		if err != nil {

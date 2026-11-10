@@ -3,7 +3,9 @@ package viz
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"html/template"
+	"log"
 	"net/http"
 
 	"github.com/h0n9/oh-my-graph/internal/graph"
@@ -79,24 +81,46 @@ func PWAAssets() http.Handler {
 }
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
-	names := h.manager.Topics()
-	infos := make([]topicInfo, 0, len(names))
-	for _, name := range names {
-		g, err := h.manager.Topic(name)
+	topics, err := h.manager.Topics()
+	if err != nil {
+		http.Error(w, "Could not load topics.", http.StatusInternalServerError)
+		return
+	}
+	infos := make([]topicInfo, 0, len(topics))
+	for _, topic := range topics {
+		if topic.Archived {
+			continue
+		}
+		g, release, err := h.manager.OpenTopic(topic.Name, false)
 		if err != nil {
 			continue
 		}
 		_, nodeCount, edgeCount := g.Stats()
-		infos = append(infos, topicInfo{Name: name, NodeCount: nodeCount, EdgeCount: edgeCount})
+		release()
+		infos = append(infos, topicInfo{Name: topic.Name, NodeCount: nodeCount, EdgeCount: edgeCount})
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	indexTmpl.Execute(w, infos)
 }
 
+func topicErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, graph.ErrInvalidTopicName):
+		return http.StatusBadRequest
+	case errors.Is(err, graph.ErrTopicNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, graph.ErrTopicArchived), errors.Is(err, graph.ErrTopicConflict):
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
 type graphData struct {
-	Nodes []nodeView `json:"nodes"`
-	Edges []edgeView `json:"edges"`
+	Instance string     `json:"instance"`
+	Nodes    []nodeView `json:"nodes"`
+	Edges    []edgeView `json:"edges"`
 }
 
 type nodeView struct {
@@ -116,23 +140,32 @@ type edgeView struct {
 }
 
 func (h *Handler) serveGraphData(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	topic := r.URL.Query().Get("topic")
 	if topic == "" {
 		http.Error(w, "topic required", http.StatusBadRequest)
 		return
 	}
 
-	g, err := h.manager.Topic(topic)
+	g, release, err := h.manager.OpenTopic(topic, false)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status, message := topicErrorStatus(err), err.Error()
+		if status == http.StatusInternalServerError {
+			log.Printf("oh-my-graph: load graph: %v", err)
+			message = "Could not load graph."
+		}
+		http.Error(w, message, status)
 		return
 	}
 
 	nodes, edges := g.Snapshot()
+	instance := g.Instance()
+	release()
 
 	data := graphData{
-		Nodes: make([]nodeView, 0, len(nodes)),
-		Edges: make([]edgeView, 0, len(edges)),
+		Instance: instance,
+		Nodes:    make([]nodeView, 0, len(nodes)),
+		Edges:    make([]edgeView, 0, len(edges)),
 	}
 	for _, n := range nodes {
 		data.Nodes = append(data.Nodes, nodeView{

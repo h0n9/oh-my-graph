@@ -66,6 +66,9 @@ func TestTagHandlerValidationAndEmptyJSON(t *testing.T) {
 			t.Fatalf("expected validation error for %s", params)
 		}
 	}
+	if _, rpcErr := writeHandler(mgr)(json.RawMessage(`{"topic":"empty"}`)); rpcErr != nil {
+		t.Fatal(rpcErr)
+	}
 	result, rpcErr := search(json.RawMessage(`{"topic":"empty","tags":["missing"]}`))
 	if rpcErr != nil {
 		t.Fatal(rpcErr)
@@ -103,12 +106,19 @@ func TestTagToolsRegistered(t *testing.T) {
 func BenchmarkSearchByTagsHandler(b *testing.B) {
 	mgr := graph.NewManager(b.TempDir())
 	defer mgr.Close()
-	g, _ := mgr.Topic("bench-tags")
+	g, release, err := mgr.OpenTopic("bench-tags", true)
+	if err != nil {
+		b.Fatal(err)
+	}
 	nodes := make([]*graph.Node, 1000)
 	for i := range nodes {
 		nodes[i] = &graph.Node{NodeID: string(rune(i + 1)), Type: graph.NodeTypeFinding, Summary: "node", Tags: []string{"common"}}
 	}
-	_, _ = g.Write(nodes, nil)
+	_, err = g.Write(nodes, nil)
+	release()
+	if err != nil {
+		b.Fatal(err)
+	}
 	h := searchByTagsHandler(mgr)
 	params := json.RawMessage(`{"topic":"bench-tags","tags":["common"]}`)
 	b.ResetTimer()
