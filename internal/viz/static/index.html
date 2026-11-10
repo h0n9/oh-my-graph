@@ -109,7 +109,7 @@
     gap: 8px;
   }
 
-  button, input, summary {
+  button, input {
     font: inherit;
     color: var(--fg);
     background: var(--bg);
@@ -118,17 +118,16 @@
     border-radius: 4px;
   }
 
-  button, summary { cursor: pointer; }
-  button:hover, summary:hover { background: var(--hover); }
-  .rename-form {
-    display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
+  button { cursor: pointer; }
+  button:hover { background: var(--hover); }
+
+  .rename-field {
+    display: grid;
+    gap: 4px;
+    margin-top: 12px;
   }
 
-  .rename-form input { width: min(18ch, 100%); }
+  .rename-field input { width: min(32ch, 100%); }
 
   dialog {
     margin: auto;
@@ -167,15 +166,7 @@
       <span class="stats">{{.NodeCount}} nodes · {{.EdgeCount}} edges</span>
     </a>
     <div class="actions">
-      <details>
-        <summary aria-label="Rename {{.Name}}">Rename</summary>
-        <form class="rename-form" action="/topics/rename" method="post">
-          <input type="hidden" name="topic" value="{{.Name}}">
-          <label for="name-{{.Name}}">New name</label>
-          <input id="name-{{.Name}}" name="new_name" value="{{.Name}}" required maxlength="64" pattern="[a-zA-Z0-9_\-]+">
-          <button type="submit">Save</button>
-        </form>
-      </details>
+      <button type="button" data-rename="{{.Name}}" aria-label="Rename {{.Name}}">Rename</button>
       <button type="button" data-archive="{{.Name}}" aria-label="Archive {{.Name}}">Archive</button>
     </div>
     {{end}}
@@ -186,6 +177,20 @@
 <p class="empty">{{if .Archived}}No archived topics.{{else}}No topics yet.{{end}}</p>
 {{end}}
 {{if and .Topics (not .Archived)}}
+<dialog id="rename-dialog" aria-labelledby="rename-title">
+  <h2 id="rename-title">Rename topic</h2>
+  <form action="/topics/rename" method="post">
+    <input type="hidden" name="topic">
+    <div class="rename-field">
+      <label for="new-topic-name">New name</label>
+      <input id="new-topic-name" name="new_name" required maxlength="64" pattern="[a-zA-Z0-9_\-]+" autofocus>
+    </div>
+    <div class="actions">
+      <button type="button" id="cancel-rename">Cancel</button>
+      <button type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
 <dialog id="archive-dialog" aria-labelledby="archive-title" aria-describedby="archive-description">
   <h2 id="archive-title"></h2>
   <p id="archive-description">You can restore this topic from Archived.</p>
@@ -196,6 +201,21 @@
   </form>
 </dialog>
 <script>
+const renameDialog = document.getElementById('rename-dialog');
+const renameTopic = renameDialog.querySelector('input[name=topic]');
+const newTopicName = document.getElementById('new-topic-name');
+
+document.querySelectorAll('[data-rename]').forEach(button => {
+  button.addEventListener('click', () => {
+    renameTopic.value = button.dataset.rename;
+    newTopicName.value = renameTopic.value;
+    renameDialog.showModal();
+    newTopicName.select();
+  });
+});
+
+document.getElementById('cancel-rename').addEventListener('click', () => renameDialog.close());
+
 const archiveDialog = document.getElementById('archive-dialog');
 const archiveTitle = document.getElementById('archive-title');
 const archiveTopic = archiveDialog.querySelector('input[name=topic]');
