@@ -199,10 +199,23 @@
   <li>
     {{if $.Archived}}
     <span class="topic-name">{{.Name}}</span>
-    <form action="/topics/restore" method="post">
-      <input type="hidden" name="topic" value="{{.Name}}">
-      <button type="submit" aria-label="Restore {{.Name}}">Restore</button>
-    </form>
+    <div class="actions row-actions">
+      <form action="/topics/restore" method="post">
+        <input type="hidden" name="topic" value="{{.Name}}">
+        <button type="submit" class="icon-button" aria-label="Restore {{.Name}}">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 5 4 10l5 5M4 10h10a5 5 0 0 1 0 10h-3"/>
+          </svg>
+          <span class="icon-tooltip" aria-hidden="true">Restore</span>
+        </button>
+      </form>
+      <button type="button" class="icon-button" data-delete="{{.Name}}" data-delete-token="{{.DeleteToken}}" aria-label="Delete {{.Name}}">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5m4-5v5"/>
+        </svg>
+        <span class="icon-tooltip" aria-hidden="true">Delete</span>
+      </button>
+    </div>
     {{else}}
     <a href="/graph?topic={{.Name}}">
       <span class="topic-name">{{.Name}}</span>
@@ -231,7 +244,35 @@
 {{else}}
 <p class="empty">{{if .Archived}}No archived topics.{{else}}No topics yet.{{end}}</p>
 {{end}}
-{{if and .Topics (not .Archived)}}
+{{if .Topics}}
+{{if .Archived}}
+<dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+  <h2 id="delete-title"></h2>
+  <p id="delete-description">This permanently deletes the topic and its graph data. You cannot undo this.</p>
+  <form class="actions" action="/topics/delete" method="post">
+    <input type="hidden" name="topic">
+    <input type="hidden" name="delete_token">
+    <button type="submit" formmethod="dialog" autofocus>Cancel</button>
+    <button type="submit">Delete permanently</button>
+  </form>
+</dialog>
+<script>
+const deleteDialog = document.getElementById('delete-dialog');
+const deleteTitle = document.getElementById('delete-title');
+const deleteTopic = deleteDialog.querySelector('input[name=topic]');
+const deleteToken = deleteDialog.querySelector('input[name=delete_token]');
+
+document.querySelectorAll('[data-delete]').forEach(button => {
+  button.addEventListener('click', () => {
+    const topic = button.dataset.delete;
+    deleteTitle.textContent = 'Delete "' + topic + '"?';
+    deleteTopic.value = topic;
+    deleteToken.value = button.dataset.deleteToken;
+    deleteDialog.showModal();
+  });
+});
+</script>
+{{else}}
 <dialog id="rename-dialog" aria-labelledby="rename-title">
   <h2 id="rename-title">Rename topic</h2>
   <form action="/topics/rename" method="post">
@@ -284,6 +325,7 @@ document.querySelectorAll('[data-archive]').forEach(button => {
   });
 });
 </script>
+{{end}}
 {{end}}
 </body>
 </html>

@@ -17,9 +17,10 @@ var staticFS embed.FS
 var indexTmpl = template.Must(template.ParseFS(staticFS, "static/index.html"))
 
 type topicInfo struct {
-	Name      string
-	NodeCount int
-	EdgeCount int
+	Name        string
+	DeleteToken string
+	NodeCount   int
+	EdgeCount   int
 }
 
 type indexView struct {
@@ -48,7 +49,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, staticFS, "static/graph.html")
 	case "/api/graph":
 		h.serveGraphData(w, r)
-	case "/topics/rename", "/topics/archive", "/topics/restore":
+	case "/topics/rename", "/topics/archive", "/topics/restore", "/topics/delete":
 		h.changeTopic(w, r)
 	default:
 		http.NotFound(w, r)
@@ -101,7 +102,7 @@ func (h *Handler) serveIndex(w http.ResponseWriter, archived bool, status int, m
 		if topic.Archived != archived {
 			continue
 		}
-		info := topicInfo{Name: topic.Name}
+		info := topicInfo{Name: topic.Name, DeleteToken: topic.DeleteToken}
 		if !archived {
 			g, release, err := h.manager.OpenTopic(topic.Name, false)
 			if err != nil {
@@ -127,7 +128,7 @@ func topicErrorStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, graph.ErrTopicNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, graph.ErrTopicArchived), errors.Is(err, graph.ErrTopicConflict):
+	case errors.Is(err, graph.ErrTopicArchived), errors.Is(err, graph.ErrTopicConflict), errors.Is(err, graph.ErrStaleDelete):
 		return http.StatusConflict
 	default:
 		return http.StatusInternalServerError
@@ -144,7 +145,7 @@ func (h *Handler) changeTopic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cross-origin topic changes are forbidden", http.StatusForbidden)
 		return
 	}
-	archived := r.URL.Path == "/topics/restore"
+	archived := r.URL.Path == "/topics/restore" || r.URL.Path == "/topics/delete"
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := r.ParseForm(); err != nil {
 		h.serveIndex(w, archived, http.StatusBadRequest, "Invalid topic form.")
@@ -160,12 +161,19 @@ func (h *Handler) changeTopic(w http.ResponseWriter, r *http.Request) {
 		err = h.manager.ArchiveTopic(topic)
 	case "/topics/restore":
 		err = h.manager.RestoreTopic(topic)
+	case "/topics/delete":
+		err = h.manager.DeleteTopic(topic, r.PostForm.Get("delete_token"))
 	}
 	if err != nil {
 		status, message := topicErrorStatus(err), err.Error()
 		if status == http.StatusInternalServerError {
 			log.Printf("oh-my-graph: %s: %v", r.URL.Path, err)
 			message = "Could not update topic."
+			if errors.Is(err, graph.ErrDeletePending) {
+				message = graph.ErrDeletePending.Error()
+			} else if r.URL.Path == "/topics/delete" {
+				message = "Could not delete topic."
+			}
 		}
 		h.serveIndex(w, archived, status, message)
 		return

@@ -43,7 +43,7 @@ func TestTopicLifecycle(t *testing.T) {
 	mgr = NewManager(dir)
 	t.Cleanup(mgr.Close)
 	topics, err := mgr.Topics()
-	if err != nil || len(topics) != 1 || topics[0] != (TopicInfo{Name: "second", Archived: true}) {
+	if err != nil || len(topics) != 1 || topics[0].Name != "second" || !topics[0].Archived || topics[0].DeleteToken == "" {
 		t.Fatalf("archived topics after restart: %v, %v", topics, err)
 	}
 	assertTopicOpenError(t, mgr, "second", true, ErrTopicArchived)
@@ -183,5 +183,117 @@ func TestArchiveFailureReopensActiveGraph(t *testing.T) {
 	release()
 	if reopened == g || seq != cursor || nodes != 1 {
 		t.Fatalf("active graph did not reopen with its original data: cursor %d, nodes %d", seq, nodes)
+	}
+}
+
+func TestDeleteArchivedTopicRejectsStaleConfirmation(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	defer mgr.Close()
+	create := func() {
+		t.Helper()
+		_, release, err := mgr.OpenTopic("topic", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		release()
+	}
+	archive := func() string {
+		t.Helper()
+		if err := mgr.ArchiveTopic("topic"); err != nil {
+			t.Fatal(err)
+		}
+		topics, err := mgr.Topics()
+		if err != nil || len(topics) != 1 || topics[0].DeleteToken == "" {
+			t.Fatalf("archived topic: %v, %v", topics, err)
+		}
+		return topics[0].DeleteToken
+	}
+	create()
+	first := archive()
+	if err := mgr.RestoreTopic("topic"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.DeleteTopic("topic", first); !errors.Is(err, ErrTopicConflict) {
+		t.Fatalf("deleting active topic: %v", err)
+	}
+	second := archive()
+	if err := mgr.DeleteTopic("topic", first); !errors.Is(err, ErrStaleDelete) {
+		t.Fatalf("deleting with pre-restore confirmation: %v", err)
+	}
+	if err := mgr.DeleteTopic("topic", second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "topic")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("topic directory still present: %v", err)
+	}
+	if err := mgr.DeleteTopic("topic", second); !errors.Is(err, ErrTopicNotFound) {
+		t.Fatalf("repeated delete: %v", err)
+	}
+	create()
+	third := archive()
+	if err := mgr.DeleteTopic("topic", second); !errors.Is(err, ErrStaleDelete) {
+		t.Fatalf("deleting recreated topic: %v", err)
+	}
+	if err := mgr.DeleteTopic("topic", third); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPendingTopicDeletionRetriesOnStartup(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("requires filesystem permissions to apply to the test process")
+	}
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	defer mgr.Close()
+	_, release, err := mgr.OpenTopic("topic", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := mgr.ArchiveTopic("topic"); err != nil {
+		t.Fatal(err)
+	}
+	topics, err := mgr.Topics()
+	if err != nil || len(topics) != 1 {
+		t.Fatalf("archived topic: %v, %v", topics, err)
+	}
+	blockedDir := filepath.Join(dir, "topic", "blocked")
+	if err := os.Mkdir(blockedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blockedDir, "data"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blockedDir, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		matches, _ := filepath.Glob(filepath.Join(dir, deletionPrefix+"*", "topic", "blocked"))
+		for _, path := range append(matches, blockedDir) {
+			os.Chmod(path, 0755)
+		}
+	})
+	if err := mgr.DeleteTopic("topic", topics[0].DeleteToken); !errors.Is(err, ErrDeletePending) {
+		t.Fatalf("deleting read-only topic: %v", err)
+	}
+	topics, err = mgr.Topics()
+	if err != nil || len(topics) != 0 {
+		t.Fatalf("pending deletion appeared in topic list: %v, %v", topics, err)
+	}
+	mgr.Close()
+
+	pending, err := filepath.Glob(filepath.Join(dir, deletionPrefix+"*"))
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending deletion: %v, %v", pending, err)
+	}
+	if err := os.Chmod(filepath.Join(pending[0], "topic", "blocked"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewManager(dir)
+	defer restarted.Close()
+	if _, err := os.Stat(pending[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending deletion remained after restart: %v", err)
 	}
 }

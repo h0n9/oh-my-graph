@@ -1,8 +1,10 @@
 package graph
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,38 +13,64 @@ import (
 
 var topicNameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
+const deletionPrefix = ".oh-my-graph-deleting-"
+
+var deletionDirRE = regexp.MustCompile(`^\.oh-my-graph-deleting-[0-9]+$`)
+
 var (
 	ErrInvalidTopicName = errors.New("invalid topic name")
 	ErrTopicNotFound    = errors.New("topic not found")
 	ErrTopicArchived    = errors.New("topic is archived")
 	ErrTopicConflict    = errors.New("topic name already in use")
+	ErrStaleDelete      = errors.New("this deletion confirmation expired. Open it again from Archived")
+	ErrDeletePending    = errors.New("topic removed from Archived, but some files remain. Cleanup will retry when the server restarts")
 )
 
 const archiveMarker = ".archived"
 
 type TopicInfo struct {
-	Name     string
-	Archived bool
+	Name        string
+	Archived    bool
+	DeleteToken string
 }
 
 type Manager struct {
-	mu      sync.RWMutex
-	baseDir string
-	graphs  map[string]*TopicGraph
-	closed  bool
+	mu           sync.RWMutex
+	baseDir      string
+	graphs       map[string]*TopicGraph
+	deleteTokens map[string]string
+	closed       bool
 }
 
 func NewManager(baseDir string) *Manager {
 	os.MkdirAll(baseDir, 0755)
+	cleanPendingDeletions(baseDir)
 	return &Manager{
-		baseDir: baseDir,
-		graphs:  make(map[string]*TopicGraph),
+		baseDir:      baseDir,
+		graphs:       make(map[string]*TopicGraph),
+		deleteTokens: make(map[string]string),
+	}
+}
+
+// cleanPendingDeletions runs before this manager starts serving requests.
+func cleanPendingDeletions(baseDir string) {
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		log.Printf("oh-my-graph: scan for pending topic deletions: %v", err)
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && deletionDirRE.MatchString(entry.Name()) {
+			if err := os.RemoveAll(filepath.Join(baseDir, entry.Name())); err != nil {
+				log.Printf("oh-my-graph: retry pending topic deletion: %v", err)
+			}
+		}
 	}
 }
 
 func (m *Manager) Topics() ([]TopicInfo, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	entries, err := os.ReadDir(m.baseDir)
 	if err != nil {
@@ -57,7 +85,16 @@ func (m *Manager) Topics() ([]TopicInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		topics = append(topics, TopicInfo{Name: entry.Name(), Archived: archived})
+		topic := TopicInfo{Name: entry.Name(), Archived: archived}
+		if archived {
+			token := m.deleteTokens[topic.Name]
+			if token == "" {
+				token = rand.Text()
+				m.deleteTokens[topic.Name] = token
+			}
+			topic.DeleteToken = token
+		}
+		topics = append(topics, topic)
 	}
 	return topics, nil
 }
@@ -186,8 +223,41 @@ func (m *Manager) ArchiveTopic(name string) error {
 
 func (m *Manager) RestoreTopic(name string) error {
 	return m.changeTopic(name, true, func(dir string) error {
-		return os.Remove(filepath.Join(dir, archiveMarker))
+		if err := os.Remove(filepath.Join(dir, archiveMarker)); err != nil {
+			return err
+		}
+		delete(m.deleteTokens, name)
+		return nil
 	})
+}
+
+// DeleteTopic checks the archive confirmation while holding the manager lock.
+// Move the whole directory out of the topic namespace before unlinking any files.
+func (m *Manager) DeleteTopic(name, token string) error {
+	var pendingDir string
+	err := m.changeTopic(name, true, func(dir string) error {
+		if token == "" || token != m.deleteTokens[name] {
+			return ErrStaleDelete
+		}
+		var err error
+		pendingDir, err = os.MkdirTemp(m.baseDir, deletionPrefix)
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(dir, filepath.Join(pendingDir, "topic")); err != nil {
+			os.Remove(pendingDir)
+			return err
+		}
+		delete(m.deleteTokens, name)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(pendingDir); err != nil {
+		return fmt.Errorf("%w: %w", ErrDeletePending, err)
+	}
+	return nil
 }
 
 func (m *Manager) changeTopic(name string, requireArchived bool, change func(string) error) error {
