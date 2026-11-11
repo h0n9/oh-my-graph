@@ -109,6 +109,12 @@
     gap: 8px;
   }
 
+  .row-actions {
+    margin-inline-start: auto;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+
   button, input {
     font: inherit;
     color: var(--fg);
@@ -202,7 +208,7 @@
       <span class="topic-name">{{.Name}}</span>
       <span class="stats">{{.NodeCount}} nodes · {{.EdgeCount}} edges</span>
     </a>
-    <div class="actions">
+    <div class="actions row-actions">
       <button type="button" class="icon-button" data-rename="{{.Name}}" aria-label="Rename {{.Name}}">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="m4 20 4.5-1 11-11a2.5 2.5 0 0 0-3.5-3.5l-11 11L4 20Z"/>
