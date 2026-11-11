@@ -2,6 +2,8 @@
 
 oh-my-graph is an MCP server that lets AI assistants share project findings, decisions, and notes across sessions.
 
+![A project graph with connected findings, decisions, and artifacts](assets/screenshot.png)
+
 ## Quick Start
 
 1. **Install and start the server.**
@@ -32,9 +34,15 @@ oh-my-graph is an MCP server that lets AI assistants share project findings, dec
 
    Open [the graph](http://localhost:7780/), select `getting-started`, and click `My first graph note` to see its details.
 
-   ![The getting-started graph with My first graph note selected and its details open](assets/screenshot.png)
+   ![The getting-started graph with My first graph note selected and its details open](assets/first-note.png)
 
-[Add a second note and link it to the first](docs/using-the-graph.md#link-two-notes).
+4. **Link a second note (optional).** Paste this into your AI client.
+
+   > In oh-my-graph, find the existing note `My first graph note` in topic `getting-started`. Add a finding in that topic with summary `Note visible in browser` and description `I opened getting-started and saw My first graph note in the graph.` Add a `supports` edge from the new finding to the existing note.
+
+   Open [getting-started](http://localhost:7780/graph?topic=getting-started) and select `My first graph note`. Look for `Note visible in browser` under **Incoming**. The arrow points from the supporting observation to the note it supports.
+
+   ![Two findings connected by a supports arrow, with the incoming edge shown in the first note’s details](assets/linked-notes.png)
 
 ## Guides
 
