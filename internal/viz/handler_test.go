@@ -135,4 +135,30 @@ func TestTopicManagementRoutes(t *testing.T) {
 		t.Fatalf("restore redirect: %s", got)
 	}
 	graphInstance("renamed")
+	request("POST", "/topics/delete", "topic=renamed", "same-origin", 409)
+	request("POST", "/topics/archive", "topic=renamed", "same-origin", 303)
+	topics, err := mgr.Topics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var token string
+	for _, topic := range topics {
+		if topic.Name == "renamed" {
+			token = topic.DeleteToken
+		}
+	}
+	if token == "" {
+		t.Fatal("archived topic did not receive a delete token")
+	}
+	archivedPage := request("GET", "/?tab=archived", "", "", 200).Body.String()
+	if !strings.Contains(archivedPage, `data-delete-token="`+token+`"`) {
+		t.Fatal("archived page did not render the token")
+	}
+	form := "topic=renamed&delete_token=" + token
+	request("POST", "/topics/delete", form, "cross-site", 403)
+	request("POST", "/topics/delete", "topic=renamed&delete_token=stale", "same-origin", 409)
+	if got := request("POST", "/topics/delete", form, "same-origin", 303).Header().Get("Location"); got != "/?tab=archived" {
+		t.Fatalf("delete redirect: %s", got)
+	}
+	request("POST", "/topics/delete", form, "same-origin", 404)
 }

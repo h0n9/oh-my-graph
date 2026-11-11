@@ -109,6 +109,12 @@
     gap: 8px;
   }
 
+  .row-actions {
+    margin-inline-start: auto;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+
   button, input {
     font: inherit;
     color: var(--fg);
@@ -193,16 +199,26 @@
   <li>
     {{if $.Archived}}
     <span class="topic-name">{{.Name}}</span>
-    <form action="/topics/restore" method="post">
-      <input type="hidden" name="topic" value="{{.Name}}">
-      <button type="submit" aria-label="Restore {{.Name}}">Restore</button>
-    </form>
+    <div class="actions row-actions">
+      <button type="button" class="icon-button" data-restore="{{.Name}}" aria-label="Restore {{.Name}}">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 5 4 10l5 5M4 10h10a5 5 0 0 1 0 10h-3"/>
+        </svg>
+        <span class="icon-tooltip" aria-hidden="true">Restore</span>
+      </button>
+      <button type="button" class="icon-button" data-delete="{{.Name}}" data-delete-token="{{.DeleteToken}}" aria-label="Delete {{.Name}}">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5m4-5v5"/>
+        </svg>
+        <span class="icon-tooltip" aria-hidden="true">Delete</span>
+      </button>
+    </div>
     {{else}}
     <a href="/graph?topic={{.Name}}">
       <span class="topic-name">{{.Name}}</span>
       <span class="stats">{{.NodeCount}} nodes · {{.EdgeCount}} edges</span>
     </a>
-    <div class="actions">
+    <div class="actions row-actions">
       <button type="button" class="icon-button" data-rename="{{.Name}}" aria-label="Rename {{.Name}}">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="m4 20 4.5-1 11-11a2.5 2.5 0 0 0-3.5-3.5l-11 11L4 20Z"/>
@@ -225,7 +241,57 @@
 {{else}}
 <p class="empty">{{if .Archived}}No archived topics.{{else}}No topics yet.{{end}}</p>
 {{end}}
-{{if and .Topics (not .Archived)}}
+{{if .Topics}}
+{{if .Archived}}
+<dialog id="restore-dialog" aria-labelledby="restore-title" aria-describedby="restore-description">
+  <h2 id="restore-title"></h2>
+  <p id="restore-description">This moves the topic back to Topics and makes its graph available again.</p>
+  <form class="actions" action="/topics/restore" method="post">
+    <input type="hidden" name="topic">
+    <button type="submit" formmethod="dialog" autofocus>Cancel</button>
+    <button type="submit">Restore</button>
+  </form>
+</dialog>
+<dialog id="delete-dialog" aria-labelledby="delete-title" aria-describedby="delete-description">
+  <h2 id="delete-title"></h2>
+  <p id="delete-description">This permanently deletes the topic and its graph data. You cannot undo this.</p>
+  <form class="actions" action="/topics/delete" method="post">
+    <input type="hidden" name="topic">
+    <input type="hidden" name="delete_token">
+    <button type="submit" formmethod="dialog" autofocus>Cancel</button>
+    <button type="submit">Delete permanently</button>
+  </form>
+</dialog>
+<script>
+const restoreDialog = document.getElementById('restore-dialog');
+const restoreTitle = document.getElementById('restore-title');
+const restoreTopic = restoreDialog.querySelector('input[name=topic]');
+
+document.querySelectorAll('[data-restore]').forEach(button => {
+  button.addEventListener('click', () => {
+    const topic = button.dataset.restore;
+    restoreTitle.textContent = 'Restore "' + topic + '"?';
+    restoreTopic.value = topic;
+    restoreDialog.showModal();
+  });
+});
+
+const deleteDialog = document.getElementById('delete-dialog');
+const deleteTitle = document.getElementById('delete-title');
+const deleteTopic = deleteDialog.querySelector('input[name=topic]');
+const deleteToken = deleteDialog.querySelector('input[name=delete_token]');
+
+document.querySelectorAll('[data-delete]').forEach(button => {
+  button.addEventListener('click', () => {
+    const topic = button.dataset.delete;
+    deleteTitle.textContent = 'Delete "' + topic + '"?';
+    deleteTopic.value = topic;
+    deleteToken.value = button.dataset.deleteToken;
+    deleteDialog.showModal();
+  });
+});
+</script>
+{{else}}
 <dialog id="rename-dialog" aria-labelledby="rename-title">
   <h2 id="rename-title">Rename topic</h2>
   <form action="/topics/rename" method="post">
@@ -278,6 +344,7 @@ document.querySelectorAll('[data-archive]').forEach(button => {
   });
 });
 </script>
+{{end}}
 {{end}}
 </body>
 </html>
