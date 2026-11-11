@@ -1,6 +1,6 @@
 # Setup
 
-[Back to README](../README.md)
+[Back to Quick Start](../README.md#quick-start)
 
 ## Connecting AI Clients
 

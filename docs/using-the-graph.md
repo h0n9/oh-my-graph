@@ -1,6 +1,6 @@
 # Use the graph
 
-[Back to README](../README.md)
+[Back to Quick Start](../README.md#quick-start)
 
 ## Explore and manage topics
 
