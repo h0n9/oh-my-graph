@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{{template "head"}}
+<title>connected agents · oh-my-graph</title>
+<style>
+{{template "styles"}}
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 24px; }
+  .notice { margin-bottom: 16px; color: var(--ok); }
+
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+
+  .card.inactive { opacity: 0.7; }
+
+  .card-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+  }
+
+  .agent-name { font-weight: 600; flex: 1; overflow-wrap: anywhere; }
+
+  .badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+
+  .badge.ok { color: var(--ok); }
+  .badge.warn { color: var(--warn); }
+  .badge.bad { color: var(--bad); }
+
+  dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 16px;
+    margin: 12px 0;
+    font-size: 12px;
+  }
+
+  dt { color: var(--muted); }
+  dd { overflow-wrap: anywhere; }
+
+  .card .actions { justify-content: flex-end; }
+
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  button.danger:hover { background: var(--bad); color: var(--bg); }
+
+  details { margin-bottom: 12px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+
+  .foot { color: var(--muted); font-size: 12px; margin-top: 20px; }
+  .prune { margin-top: 20px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>connected agents</h1>
+  <a class="pill" href="/">← topics</a>
+</header>
+<p class="sub">AI clients authorized to read and write your graph.</p>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+{{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
+{{if or .Live .Inactive}}
+{{range .Live}}{{template "agent" .}}{{end}}
+{{if .Inactive}}
+<details{{if .InactiveOpen}} open{{end}}>
+  <summary>{{len .Inactive}} inactive</summary>
+  {{range .Inactive}}{{template "agent" .}}{{end}}
+</details>
+{{end}}
+{{if .Inactive}}
+<form class="prune actions" action="/agents/prune" method="post" data-once>
+  <button type="submit">Prune stale registrations</button>
+</form>
+{{end}}
+<p class="foot">Revoking invalidates a client's tokens immediately and removes its registration. The client must re-authorize with your passphrase, and its connector may need to be removed and added again. Last used is approximate for about an hour after a server restart. Dates are UTC.</p>
+{{else}}
+<p class="empty">No connected agents.</p>
+{{end}}
+
+<dialog id="revoke-dialog" aria-labelledby="revoke-title" aria-describedby="revoke-description">
+  <h2 id="revoke-title"></h2>
+  <p id="revoke-description"></p>
+  <form class="actions" action="/agents/revoke" method="post" data-once>
+    <input type="hidden" name="client_id">
+    <button type="submit" formmethod="dialog" autofocus>Cancel</button>
+    <button type="submit" class="danger" id="revoke-confirm"></button>
+  </form>
+</dialog>
+<script>
+const revokeDialog = document.getElementById('revoke-dialog');
+const revokeTitle = document.getElementById('revoke-title');
+const revokeDescription = document.getElementById('revoke-description');
+const revokeConfirm = document.getElementById('revoke-confirm');
+const revokeClient = revokeDialog.querySelector('input[name=client_id]');
+
+document.querySelectorAll('[data-revoke]').forEach(button => {
+  button.addEventListener('click', () => {
+    const removable = button.dataset.removable === 'true';
+    const verb = removable ? 'Remove' : 'Revoke';
+    revokeTitle.textContent = verb + ' "' + button.dataset.name + '"?';
+    revokeDescription.textContent = removable
+      ? 'This removes the registration. It has no live session.'
+      : 'This invalidates its tokens immediately and removes its registration. It must re-authorize, and its connector may need to be removed and added again. You may be revoking the agent you are using right now.';
+    revokeConfirm.textContent = verb;
+    revokeClient.value = button.dataset.revoke;
+    revokeDialog.showModal();
+  });
+});
+
+// Disable the submit buttons once a form is submitted so a double tap can't
+// send it twice. Deferred so the browser still serializes the form first.
+document.querySelectorAll('form[data-once]').forEach(form => {
+  form.addEventListener('submit', event => {
+    if (event.submitter && event.submitter.formMethod === 'dialog') return;
+    setTimeout(() => form.querySelectorAll('button').forEach(b => { b.disabled = true; }), 0);
+  });
+});
+
+// If the browser restores this page from its back/forward cache, the buttons
+// disabled by a previous submit must work again.
+window.addEventListener('pageshow', event => {
+  if (event.persisted) document.querySelectorAll('form[data-once] button').forEach(b => { b.disabled = false; });
+});
+</script>
+</body>
+</html>
+{{define "agent"}}
+<article class="card{{if .Inactive}} inactive{{end}}">
+  <div class="card-head">
+    <span class="agent-name">{{.Name}}</span>
+    <span class="badge {{.StatusClass}}">{{.StatusLabel}}</span>
+  </div>
+  <dl>
+    <dt>connected</dt><dd>{{.Connected}}</dd>
+    <dt>last used</dt><dd>{{.LastUsed}}</dd>
+    <dt>session expires</dt><dd>{{.Session}}</dd>
+  </dl>
+  <div class="actions">
+    <button type="button" class="danger" data-revoke="{{.ClientID}}" data-name="{{.Name}}" data-removable="{{.Removable}}">{{if .Removable}}Remove{{else}}Revoke{{end}}</button>
+  </div>
+</article>
+{{end}}

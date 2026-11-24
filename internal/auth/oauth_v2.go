@@ -19,10 +19,10 @@
 // which they're built to handle gracefully.
 //
 // Because refresh tokens now survive restarts, "restart the server" is no
-// longer a way to revoke a leaked refresh token -- delete
+// longer a way to revoke a leaked refresh token. Use RevokeClient (the
+// Connected Agents page) to revoke one client, or delete
 // Config.RefreshTokensFile or rotate Config.OwnerPassphrase to force every
-// client to re-authenticate (the latter affects all clients at once; there
-// is no per-client revocation).
+// client to re-authenticate at once.
 //
 // Refresh tokens are keyed by their SHA-256 hash, not their raw value, in
 // both the in-memory map and the persisted file -- defense in depth so a
