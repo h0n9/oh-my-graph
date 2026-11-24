@@ -94,6 +94,8 @@ oh-my-graph --auth
 
 This turns on a full OAuth 2.1 Authorization Code + PKCE flow with Dynamic Client Registration — MCP clients self-register and your browser prompts once for the passphrase; bearer tokens on `/mcp` and `/omg-mcp` authorize every call after that. The web UI, including topic management, uses a separate session cookie issued by the in-app `/login` page after you enter the same passphrase.
 
+To see which AI clients are connected and cut one off, open `/agents` in the web UI. See [Manage connected agents](using-the-graph.md#manage-connected-agents).
+
 Use a reverse proxy to terminate HTTPS and limit inbound access with firewall rules where possible. See [Deploy on Sprites](#deploy-on-sprites) for a worked example.
 
 ## Deploy on Sprites

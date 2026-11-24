@@ -10,12 +10,22 @@ Use the **pencil icon** to rename a topic or the **archive box icon** to archive
 
 ## Manage connected agents
 
-When the server runs with [`--auth`](setup.md#security-and-authentication), the topic list header shows an **agents** link. It opens **`/agents`**, which lists every AI client that has registered with the server:
+With [`--auth`](setup.md#security-and-authentication), the topic list header shows an **N agents** link (N counts agents with a live session). It opens **`/agents`**, a page of every AI client that has registered with your server. Without `--auth`, the page does not exist.
 
-- **Status** — `active`, `idle Nd` (live session, unused for more than 24 hours), `expired`, or `no tokens` (registered but never finished authorizing).
-- **Connected**, **last used**, and **session expires** — *unknown* for connections made before the server tracked these. After a server restart, *last used* is only approximate for about an hour.
+Each card shows:
 
-Use **Revoke** to cut off a client right away: its tokens and pending authorization codes are invalidated and its registration is removed. A request that is already in progress finishes, and every request after it is rejected. Some clients cannot recover from an unknown registration, so you may need to remove and add that connector again, and you may be revoking the agent you are using right now. Use **Remove** for entries that have no live session, or **Prune inactive agents** to remove all such entries older than an hour. Pruning never removes a client that is still mid-authorization.
+- **Status**: `active`, `idle Nd` (unused for over 24 hours), `expired`, or `no tokens` (registered but holds no tokens, for example it never finished authorizing).
+- **Connected**, **last used**, and **session expires**. Dates are UTC. *unknown* means the server has no record yet, for older connections or agents that never got tokens.
+
+What you can do:
+
+- **Revoke** cuts an agent off right away, after you confirm in a dialog. Its tokens and pending codes stop working and its registration is removed. A request already in progress finishes; every later request is rejected.
+- **Remove** is the same for agents with no live session, with the same dialog.
+- **Prune inactive agents** removes every inactive agent older than an hour. It never touches an agent that is mid-authorization. It runs only when you click it, and it does not ask first.
+
+After a revoke, the agent must authorize again with your passphrase. Some clients cannot recover on their own, so you may need to remove and re-add the connector. You may also be revoking the agent you are using right now.
+
+After a server restart, *last used* can be up to an hour behind.
 
 ## Continue work across assistants
 
