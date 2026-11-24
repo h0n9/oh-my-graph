@@ -305,10 +305,9 @@ func TestPersistedFileIsEncrypted(t *testing.T) {
 }
 
 // TestConcurrentPersistDoesNotLoseTokens guards the race persistRefreshTokens
-// deliberately avoids by holding s.mu for the entire marshal+encrypt+write
-// (unlike persistClients, which only holds it for the marshal). If that lock
-// were released before the file write, concurrent writers could land on disk
-// out of order and this test would flake by losing tokens.
+// deliberately avoids by holding s.mu for the entire marshal+encrypt+write.
+// If that lock were released before the file write, concurrent writers could
+// land on disk out of order and this test would flake by losing tokens.
 func TestConcurrentPersistDoesNotLoseTokens(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(dir, "pw")
