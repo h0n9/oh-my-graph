@@ -100,6 +100,19 @@ type refreshToken struct {
 	ClientID  string
 	Scope     string
 	ExpiresAt time.Time
+
+	// Connection metadata for the Connected Agents page. These fields were
+	// added after refresh tokens were first persisted, so tokens loaded from
+	// an older file decode them as zero times ("unknown"); the file format
+	// (and refreshTokensAAD) is unchanged because adding JSON fields is
+	// backward compatible.
+	//
+	// ConnectedAt is when the client was originally authorized and is carried
+	// across rotation; IssuedAt is when this particular token was issued;
+	// LastUsedAt is when this token (or its predecessor) last redeemed a grant.
+	ConnectedAt time.Time
+	IssuedAt    time.Time
+	LastUsedAt  time.Time
 }
 
 type Server struct {
@@ -117,6 +130,12 @@ type Server struct {
 	tokens        map[string]*accessToken
 	refreshTokens map[string]*refreshToken
 	sessions      map[string]time.Time // session ID -> expiry
+
+	// lastSeen records, per client, when a valid access token was last
+	// presented to RequireBearer. It is in-memory only: never persisted from
+	// the request path (that would do disk I/O under mu on every MCP call), so
+	// after a restart last-used is only accurate to about one access-token TTL.
+	lastSeen map[string]time.Time
 
 	// encKey and encSalt are derived once (in loadRefreshTokens, called from
 	// NewServer) and never mutated afterward, so they're safe to read from
@@ -139,6 +158,7 @@ func NewServer(cfg Config) *Server {
 		tokens:               make(map[string]*accessToken),
 		refreshTokens:        make(map[string]*refreshToken),
 		sessions:             make(map[string]time.Time),
+		lastSeen:             make(map[string]time.Time),
 	}
 	s.loadClients()
 	s.loadRefreshTokens()
@@ -394,11 +414,19 @@ func (s *Server) RequireBearer(next http.Handler) http.Handler {
 		}
 
 		tok := strings.TrimPrefix(authz, prefix)
+		now := time.Now()
 		s.mu.Lock()
 		at, ok := s.tokens[tok]
+		expired := ok && now.After(at.ExpiresAt)
+		if ok && !expired {
+			// Same critical section as the lookup, and only for a token that is
+			// both found and unexpired, so a lookup racing a revoke can't
+			// recreate a lastSeen entry for a client that was just removed.
+			s.lastSeen[at.ClientID] = now
+		}
 		s.mu.Unlock()
-		if !ok || time.Now().After(at.ExpiresAt) {
-			log.Printf("oh-my-graph/auth: bearer: rejected %s %s: token known=%v expired=%v", r.Method, r.URL.Path, ok, ok && time.Now().After(at.ExpiresAt))
+		if !ok || expired {
+			log.Printf("oh-my-graph/auth: bearer: rejected %s %s: token known=%v expired=%v", r.Method, r.URL.Path, ok, expired)
 			s.unauthorized(w)
 			return
 		}
@@ -1186,7 +1214,7 @@ func (s *Server) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Req
 	}
 
 	log.Printf("oh-my-graph/auth: token authorization_code: success for client_id=%s", c.ID)
-	s.issueTokenPair(w, c.ID, ac.Scope)
+	s.issueTokenPair(w, c.ID, ac.Scope, time.Time{}) // first grant: ConnectedAt = now
 }
 
 func (s *Server) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request) {
@@ -1211,10 +1239,22 @@ func (s *Server) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.issueTokenPair(w, c.ID, old.Scope)
+	// Carry the original connection time across rotation. Tokens persisted
+	// before ConnectedAt existed decode it as zero; fall back to the client's
+	// registration time rather than staying "unknown" forever.
+	connectedAt := old.ConnectedAt
+	if connectedAt.IsZero() {
+		connectedAt = c.CreatedAt
+	}
+	// connectedAt is non-zero here (a zero value would be treated as a first
+	// grant and reset the original connection time).
+	s.issueTokenPair(w, c.ID, old.Scope, connectedAt)
 }
 
-func (s *Server) issueTokenPair(w http.ResponseWriter, clientID, scope string) {
+// issueTokenPair mints an access/refresh pair for clientID. connectedAt is the
+// time the client was originally authorized (carried across refresh rotation);
+// pass the zero time on a first grant to use now.
+func (s *Server) issueTokenPair(w http.ResponseWriter, clientID, scope string, connectedAt time.Time) {
 	access, err := randomToken(32)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -1235,11 +1275,22 @@ func (s *Server) issueTokenPair(w http.ResponseWriter, clientID, scope string) {
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client is not registered")
 		return
 	}
-	s.tokens[access] = &accessToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(accessTokenTTL)}
+	now := time.Now()
+	if connectedAt.IsZero() {
+		connectedAt = now
+	}
+	s.tokens[access] = &accessToken{ClientID: clientID, Scope: scope, ExpiresAt: now.Add(accessTokenTTL)}
 	// Store the token hashed, not raw -- see hashToken's doc comment. Only
 	// this response body ever carries the raw value; from here on the
 	// server (memory and disk alike) only ever holds its SHA-256 digest.
-	s.refreshTokens[hashToken(refresh)] = &refreshToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(refreshTTL)}
+	s.refreshTokens[hashToken(refresh)] = &refreshToken{
+		ClientID:    clientID,
+		Scope:       scope,
+		ExpiresAt:   now.Add(refreshTTL),
+		ConnectedAt: connectedAt,
+		IssuedAt:    now,
+		LastUsedAt:  now, // the grant that minted this token is itself a use
+	}
 	s.mu.Unlock()
 	if err := s.persistRefreshTokens(); err != nil {
 		log.Printf("oh-my-graph/auth: token: %v", err) // best-effort: never fail /token over disk errors

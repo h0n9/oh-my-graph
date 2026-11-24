@@ -29,7 +29,7 @@ func TestIssueTokenPairRejectsUnregisteredClient(t *testing.T) {
 	srv.mu.Unlock()
 
 	rec := httptest.NewRecorder()
-	srv.issueTokenPair(rec, "c1", "")
+	srv.issueTokenPair(rec, "c1", "", time.Time{})
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 invalid_client, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -64,7 +64,7 @@ func TestIssueTokenPairConcurrentWithClientRemoval(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			srv.issueTokenPair(httptest.NewRecorder(), "c1", "")
+			srv.issueTokenPair(httptest.NewRecorder(), "c1", "", time.Time{})
 		}()
 	}
 	wg.Add(1)
@@ -88,7 +88,7 @@ func TestIssueTokenPairConcurrentWithClientRemoval(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rec := httptest.NewRecorder()
-			srv.issueTokenPair(rec, "c1", "")
+			srv.issueTokenPair(rec, "c1", "", time.Time{})
 			late <- rec.Code
 		}()
 	}
