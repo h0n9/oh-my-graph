@@ -79,6 +79,16 @@ type client struct {
 	RedirectURIs            []string
 	TokenEndpointAuthMethod string
 	CreatedAt               time.Time
+
+	// LastAuthorizeAt is when /authorize last validated this client. It lets
+	// PruneStale leave alone a client whose owner has the authorize form open
+	// but hasn't submitted it yet. It is stamped in memory only (the route is
+	// unauthenticated, so it must never trigger a disk write) and reaches disk
+	// with the next persist that happens anyway. Any /authorize request for a
+	// known client_id stamps it, even one with otherwise invalid parameters;
+	// that only delays pruning a registration and is harmless. Absent in older
+	// oauth-clients.json files, which decode it as zero, so no format bump.
+	LastAuthorizeAt time.Time
 }
 
 type authCode struct {
@@ -801,6 +811,9 @@ func parseAuthorizeParams(values url.Values) authorizeParams {
 func (s *Server) validateAuthorizeParams(p authorizeParams) (c *client, mustNotRedirect bool, errCode, errDesc string) {
 	s.mu.Lock()
 	cl, ok := s.clients[p.ClientID]
+	if ok {
+		cl.LastAuthorizeAt = time.Now() // in memory only; see client.LastAuthorizeAt
+	}
 	s.mu.Unlock()
 	if !ok {
 		return nil, true, "invalid_client", "unknown client_id"

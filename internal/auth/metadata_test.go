@@ -45,7 +45,12 @@ func refreshGrant(t *testing.T, baseURL, clientID, refresh string) {
 
 func newTestHTTPServer(t *testing.T, passphrase string) (*Server, *httptest.Server) {
 	t.Helper()
-	srv := newTestServer(t, testConfig(t.TempDir(), passphrase))
+	return newTestHTTPServerWithConfig(t, testConfig(t.TempDir(), passphrase))
+}
+
+func newTestHTTPServerWithConfig(t *testing.T, cfg Config) (*Server, *httptest.Server) {
+	t.Helper()
+	srv := newTestServer(t, cfg)
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 	ts := httptest.NewServer(mux)
