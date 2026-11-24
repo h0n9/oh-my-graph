@@ -25,6 +25,22 @@ func deriveKey(passphrase string, salt []byte) ([]byte, error) {
 	return pbkdf2.Key(sha256.New, passphrase, salt, pbkdf2Iterations, aesKeySize)
 }
 
+// newSalt returns a fresh random salt for a new encrypted file. It is a
+// variable only so tests can pin it (see TestMain); production never
+// reassigns it.
+var newSalt = func() ([]byte, error) {
+	salt := make([]byte, saltSize)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
+	return salt, nil
+}
+
+// deriveKeyFunc is what the server calls to derive its file key. It is a
+// variable only so tests can memoize it (see TestMain); production never
+// reassigns it.
+var deriveKeyFunc = deriveKey
+
 // encryptBlob encrypts plaintext with AES-256-GCM under key, binding aad,
 // with a fresh random nonce. Returns nonce || ciphertext+tag.
 func encryptBlob(key, aad, plaintext []byte) ([]byte, error) {

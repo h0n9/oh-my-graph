@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/h0n9/oh-my-graph/internal/graph"
 )
@@ -14,7 +15,10 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-var indexTmpl = template.Must(template.ParseFS(staticFS, "static/index.html"))
+// The page file is listed first: ParseFS names the returned template after the
+// first file, and shared.html only holds {{define}} blocks (an empty body if
+// executed directly).
+var indexTmpl = template.Must(template.ParseFS(staticFS, "static/index.html", "static/shared.html"))
 
 type topicInfo struct {
 	Name        string
@@ -24,18 +28,26 @@ type topicInfo struct {
 }
 
 type indexView struct {
-	Archived bool
-	Error    string
-	Topics   []topicInfo
+	Archived      bool
+	Error         string
+	Topics        []topicInfo
+	AgentsEnabled bool
+	AgentCount    int
 }
 
 type Handler struct {
 	manager *graph.Manager
 	csrf    *http.CrossOriginProtection
+	agents  AgentManager // nil unless enabled with WithAgents
+	now     func() time.Time
 }
 
-func NewHandler(mgr *graph.Manager) *Handler {
-	return &Handler{manager: mgr, csrf: http.NewCrossOriginProtection()}
+func NewHandler(mgr *graph.Manager, opts ...Option) *Handler {
+	h := &Handler{manager: mgr, csrf: http.NewCrossOriginProtection(), now: time.Now}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +63,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveGraphData(w, r)
 	case "/topics/rename", "/topics/archive", "/topics/restore", "/topics/delete":
 		h.changeTopic(w, r)
+	case "/agents", "/agents/revoke", "/agents/prune":
+		if h.agents == nil {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Path == "/agents" {
+			h.agentsPage(w, r)
+		} else {
+			h.changeAgents(w, r)
+		}
 	default:
 		http.NotFound(w, r)
 	}
@@ -76,7 +98,7 @@ func servePWAAsset(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // PWAAssets returns a handler for the PWA manifest and icon files alone.
-// It's meant to be mounted outside of any Basic Auth wrapping applied to
+// It's meant to be mounted outside of any owner-session wrapping applied to
 // the rest of the viz UI: Safari's "Add to Home Screen" flow fetches these
 // in the background without attaching interactively-entered credentials,
 // so gating them the same way the graph pages are gated silently breaks
@@ -92,6 +114,10 @@ func PWAAssets() http.Handler {
 
 func (h *Handler) serveIndex(w http.ResponseWriter, archived bool, status int, message string) {
 	view := indexView{Archived: archived, Error: message}
+	if h.agents != nil {
+		view.AgentsEnabled = true
+		view.AgentCount = h.agentCount()
+	}
 	topics, err := h.manager.Topics()
 	if err != nil {
 		log.Printf("oh-my-graph: list topics: %v", err)

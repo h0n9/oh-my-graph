@@ -19,10 +19,10 @@
 // which they're built to handle gracefully.
 //
 // Because refresh tokens now survive restarts, "restart the server" is no
-// longer a way to revoke a leaked refresh token -- delete
+// longer a way to revoke a leaked refresh token. Use RevokeClient (the
+// Connected Agents page) to revoke one client, or delete
 // Config.RefreshTokensFile or rotate Config.OwnerPassphrase to force every
-// client to re-authenticate (the latter affects all clients at once; there
-// is no per-client revocation).
+// client to re-authenticate at once.
 //
 // Refresh tokens are keyed by their SHA-256 hash, not their raw value, in
 // both the in-memory map and the persisted file -- defense in depth so a
@@ -36,6 +36,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -78,6 +79,16 @@ type client struct {
 	RedirectURIs            []string
 	TokenEndpointAuthMethod string
 	CreatedAt               time.Time
+
+	// LastAuthorizeAt is when /authorize last validated this client. It lets
+	// PruneStale leave alone a client whose owner has the authorize form open
+	// but hasn't submitted it yet. It is stamped in memory only (the route is
+	// unauthenticated, so it must never trigger a disk write) and reaches disk
+	// with the next persist that happens anyway. Any /authorize request for a
+	// known client_id stamps it, even one with otherwise invalid parameters;
+	// that only delays pruning a registration and is harmless. Absent in older
+	// oauth-clients.json files, which decode it as zero, so no format bump.
+	LastAuthorizeAt time.Time
 }
 
 type authCode struct {
@@ -99,6 +110,19 @@ type refreshToken struct {
 	ClientID  string
 	Scope     string
 	ExpiresAt time.Time
+
+	// Connection metadata for the Connected Agents page. These fields were
+	// added after refresh tokens were first persisted, so tokens loaded from
+	// an older file decode them as zero times ("unknown"); the file format
+	// (and refreshTokensAAD) is unchanged because adding JSON fields is
+	// backward compatible.
+	//
+	// ConnectedAt is when the client was originally authorized and is carried
+	// across rotation; IssuedAt is when this particular token was issued;
+	// LastUsedAt is when this token (or its predecessor) last redeemed a grant.
+	ConnectedAt time.Time
+	IssuedAt    time.Time
+	LastUsedAt  time.Time
 }
 
 type Server struct {
@@ -116,6 +140,12 @@ type Server struct {
 	tokens        map[string]*accessToken
 	refreshTokens map[string]*refreshToken
 	sessions      map[string]time.Time // session ID -> expiry
+
+	// lastSeen records, per client, when a valid access token was last
+	// presented to RequireBearer. It is in-memory only: never persisted from
+	// the request path (that would do disk I/O under mu on every MCP call), so
+	// after a restart last-used is only accurate to about one access-token TTL.
+	lastSeen map[string]time.Time
 
 	// encKey and encSalt are derived once (in loadRefreshTokens, called from
 	// NewServer) and never mutated afterward, so they're safe to read from
@@ -138,6 +168,7 @@ func NewServer(cfg Config) *Server {
 		tokens:               make(map[string]*accessToken),
 		refreshTokens:        make(map[string]*refreshToken),
 		sessions:             make(map[string]time.Time),
+		lastSeen:             make(map[string]time.Time),
 	}
 	s.loadClients()
 	s.loadRefreshTokens()
@@ -168,34 +199,80 @@ func (s *Server) loadClients() {
 	log.Printf("oh-my-graph/auth: loaded %d client registration(s) from %s", len(clients), s.clientsFile)
 }
 
-// persistClients writes the current client registry to disk. Best-effort:
-// logs on failure but never fails the caller's request over it, since the
-// in-memory registry remains authoritative for the life of this process.
-func (s *Server) persistClients() {
+// writeFileAtomic writes data to path via a temp file + rename so readers
+// never observe a partially written file. The temp file is fsynced before the
+// rename (and the directory afterwards, best-effort) so a crash can't leave a
+// renamed-but-empty file, and it is removed if any step fails.
+func writeFileAtomic(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(tmp)
+		}
+	}()
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return fmt.Errorf("write: %w", err)
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("sync: %w", err)
+	}
+	if err = f.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("rename: %w", err)
+	}
+	if d, derr := os.Open(dir); derr == nil {
+		d.Sync() // best-effort: not supported on every platform/filesystem
+		d.Close()
+	}
+	return nil
+}
+
+// persistClients writes the current client registry to disk and returns any
+// error. Grant and registration paths treat it as best-effort (log and carry
+// on: the in-memory registry stays authoritative for this process), while
+// revoke/prune surface the error so a revocation never silently fails to
+// reach disk.
+//
+// It holds s.mu for the entire marshal+write, like persistRefreshTokens, so a
+// concurrent /register or revoke can't have its newer snapshot overwritten on
+// disk by an older one (which could resurrect a removed client).
+//
+// It must NOT be called with s.mu already held (sync.Mutex is not reentrant).
+// The file write (including fsync) happens under the lock on purpose; do not
+// release it early to recover latency, that reintroduces the stale-snapshot race.
+func (s *Server) persistClients() error {
 	if s.clientsFile == "" {
-		return
+		return nil
 	}
 	s.mu.Lock()
-	data, err := json.MarshalIndent(s.clients, "", "  ")
-	s.mu.Unlock()
-	if err != nil {
-		log.Printf("oh-my-graph/auth: persistClients: marshal: %v", err)
-		return
-	}
+	defer s.mu.Unlock()
 
-	tmp := s.clientsFile + ".tmp"
-	if err := os.MkdirAll(filepath.Dir(s.clientsFile), 0o700); err != nil {
-		log.Printf("oh-my-graph/auth: persistClients: mkdir: %v", err)
-		return
+	data, err := json.MarshalIndent(s.clients, "", "  ")
+	if err != nil {
+		return fmt.Errorf("persistClients: marshal: %w", err)
 	}
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		log.Printf("oh-my-graph/auth: persistClients: write: %v", err)
-		return
+	if err := writeFileAtomic(s.clientsFile, data); err != nil {
+		return fmt.Errorf("persistClients: %w", err)
 	}
-	if err := os.Rename(tmp, s.clientsFile); err != nil {
-		log.Printf("oh-my-graph/auth: persistClients: rename: %v", err)
-	}
+	return nil
 }
+
+// errNoEncryptionKey is returned by persistRefreshTokens when a refresh-token
+// file is configured but no encryption key could be established, so nothing
+// was written.
+var errNoEncryptionKey = errors.New("persistRefreshTokens: no encryption key available, refresh tokens not persisted")
 
 // refreshTokensAAD binds the encrypted refresh-tokens file to its purpose
 // and format version, so it can never be silently misinterpreted as some
@@ -218,28 +295,28 @@ func (s *Server) loadRefreshTokens() {
 		return
 	}
 
-	salt := make([]byte, saltSize)
+	var salt []byte
 	data, err := os.ReadFile(s.refreshTokensFile)
 	switch {
 	case err != nil && !os.IsNotExist(err):
 		log.Printf("oh-my-graph/auth: loadRefreshTokens: %v", err)
 		fallthrough
 	case err != nil:
-		if _, rerr := rand.Read(salt); rerr != nil {
-			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", rerr)
+		if salt, err = newSalt(); err != nil {
+			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", err)
 			return
 		}
 	case len(data) < saltSize:
 		log.Printf("oh-my-graph/auth: loadRefreshTokens: %s: file too short, starting empty", s.refreshTokensFile)
-		if _, rerr := rand.Read(salt); rerr != nil {
-			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", rerr)
+		if salt, err = newSalt(); err != nil {
+			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", err)
 			return
 		}
 	default:
-		copy(salt, data[:saltSize])
+		salt = append([]byte(nil), data[:saltSize]...)
 	}
 
-	key, err := deriveKey(s.ownerPassphrase, salt)
+	key, err := deriveKeyFunc(s.ownerPassphrase, salt)
 	if err != nil {
 		log.Printf("oh-my-graph/auth: loadRefreshTokens: derive key: %v", err)
 		return
@@ -280,16 +357,18 @@ func (s *Server) loadRefreshTokens() {
 // persistRefreshTokens serializes the in-memory refreshTokens map and
 // atomically writes it to disk, AES-256-GCM-encrypted under s.encKey.
 //
-// Unlike persistClients, this holds s.mu for the *entire* marshal+encrypt+
-// write sequence, not just the marshal. Refresh tokens rotate on every use
-// (unlike DCR client registrations, which are rare), so releasing the lock
-// before I/O would let two concurrent /token calls' writes land on disk out
-// of order and resurrect an already-rotated refresh token. Do not
-// "simplify" this back to match persistClients's lock-then-unlock-then-write
-// shape -- that reintroduces the race this comment is here to prevent.
-func (s *Server) persistRefreshTokens() {
+// Like persistClients, this holds s.mu for the *entire* marshal+encrypt+
+// write sequence, not just the marshal. Releasing the lock before I/O would
+// let two concurrent /token calls' writes land on disk out of order and
+// resurrect an already-rotated refresh token. Do not "simplify" this to a
+// lock-then-unlock-then-write shape -- that reintroduces the race this
+// comment is here to prevent.
+//
+// It returns any error; see persistClients for who treats that as fatal.
+// It must NOT be called with s.mu already held (sync.Mutex is not reentrant).
+func (s *Server) persistRefreshTokens() error {
 	if s.refreshTokensFile == "" {
-		return
+		return nil
 	}
 
 	s.mu.Lock()
@@ -297,36 +376,28 @@ func (s *Server) persistRefreshTokens() {
 
 	if s.encKey == nil {
 		// loadRefreshTokens couldn't establish a key (e.g. salt generation
-		// failed) -- nothing safe to encrypt under, skip this write.
-		return
+		// failed) -- nothing safe to encrypt under, so nothing is written.
+		// Report it so revoke/prune don't claim success; best-effort callers
+		// just log it.
+		return errNoEncryptionKey
 	}
 
 	plaintext, err := json.Marshal(s.refreshTokens)
 	if err != nil {
-		log.Printf("oh-my-graph/auth: persistRefreshTokens: marshal: %v", err)
-		return
+		return fmt.Errorf("persistRefreshTokens: marshal: %w", err)
 	}
 	ciphertext, err := encryptBlob(s.encKey, refreshTokensAAD, plaintext)
 	if err != nil {
-		log.Printf("oh-my-graph/auth: persistRefreshTokens: encrypt: %v", err)
-		return
+		return fmt.Errorf("persistRefreshTokens: encrypt: %w", err)
 	}
 	data := make([]byte, 0, len(s.encSalt)+len(ciphertext))
 	data = append(data, s.encSalt...)
 	data = append(data, ciphertext...)
 
-	tmp := s.refreshTokensFile + ".tmp"
-	if err := os.MkdirAll(filepath.Dir(s.refreshTokensFile), 0o700); err != nil {
-		log.Printf("oh-my-graph/auth: persistRefreshTokens: mkdir: %v", err)
-		return
+	if err := writeFileAtomic(s.refreshTokensFile, data); err != nil {
+		return fmt.Errorf("persistRefreshTokens: %w", err)
 	}
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		log.Printf("oh-my-graph/auth: persistRefreshTokens: write: %v", err)
-		return
-	}
-	if err := os.Rename(tmp, s.refreshTokensFile); err != nil {
-		log.Printf("oh-my-graph/auth: persistRefreshTokens: rename: %v", err)
-	}
+	return nil
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
@@ -353,11 +424,19 @@ func (s *Server) RequireBearer(next http.Handler) http.Handler {
 		}
 
 		tok := strings.TrimPrefix(authz, prefix)
+		now := time.Now()
 		s.mu.Lock()
 		at, ok := s.tokens[tok]
+		expired := ok && now.After(at.ExpiresAt)
+		if ok && !expired {
+			// Same critical section as the lookup, and only for a token that is
+			// both found and unexpired, so a lookup racing a revoke can't
+			// recreate a lastSeen entry for a client that was just removed.
+			s.lastSeen[at.ClientID] = now
+		}
 		s.mu.Unlock()
-		if !ok || time.Now().After(at.ExpiresAt) {
-			log.Printf("oh-my-graph/auth: bearer: rejected %s %s: token known=%v expired=%v", r.Method, r.URL.Path, ok, ok && time.Now().After(at.ExpiresAt))
+		if !ok || expired {
+			log.Printf("oh-my-graph/auth: bearer: rejected %s %s: token known=%v expired=%v", r.Method, r.URL.Path, ok, expired)
 			s.unauthorized(w)
 			return
 		}
@@ -508,7 +587,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.clients[clientID] = c
 	s.mu.Unlock()
-	s.persistClients()
+	if err := s.persistClients(); err != nil {
+		log.Printf("oh-my-graph/auth: register: %v", err) // best-effort
+	}
 
 	log.Printf("oh-my-graph/auth: register: issued client_id=%s auth_method=%s", clientID, authMethod)
 	writeJSON(w, http.StatusCreated, resp)
@@ -730,6 +811,9 @@ func parseAuthorizeParams(values url.Values) authorizeParams {
 func (s *Server) validateAuthorizeParams(p authorizeParams) (c *client, mustNotRedirect bool, errCode, errDesc string) {
 	s.mu.Lock()
 	cl, ok := s.clients[p.ClientID]
+	if ok {
+		cl.LastAuthorizeAt = time.Now() // in memory only; see client.LastAuthorizeAt
+	}
 	s.mu.Unlock()
 	if !ok {
 		return nil, true, "invalid_client", "unknown client_id"
@@ -1143,7 +1227,7 @@ func (s *Server) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Req
 	}
 
 	log.Printf("oh-my-graph/auth: token authorization_code: success for client_id=%s", c.ID)
-	s.issueTokenPair(w, c.ID, ac.Scope)
+	s.issueTokenPair(w, c.ID, ac.Scope, time.Time{}) // first grant: ConnectedAt = now
 }
 
 func (s *Server) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request) {
@@ -1168,10 +1252,22 @@ func (s *Server) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.issueTokenPair(w, c.ID, old.Scope)
+	// Carry the original connection time across rotation. Tokens persisted
+	// before ConnectedAt existed decode it as zero; fall back to the client's
+	// registration time rather than staying "unknown" forever.
+	connectedAt := old.ConnectedAt
+	if connectedAt.IsZero() {
+		connectedAt = c.CreatedAt
+	}
+	// connectedAt is non-zero here (a zero value would be treated as a first
+	// grant and reset the original connection time).
+	s.issueTokenPair(w, c.ID, old.Scope, connectedAt)
 }
 
-func (s *Server) issueTokenPair(w http.ResponseWriter, clientID, scope string) {
+// issueTokenPair mints an access/refresh pair for clientID. connectedAt is the
+// time the client was originally authorized (carried across refresh rotation);
+// pass the zero time on a first grant to use now.
+func (s *Server) issueTokenPair(w http.ResponseWriter, clientID, scope string, connectedAt time.Time) {
 	access, err := randomToken(32)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -1184,13 +1280,34 @@ func (s *Server) issueTokenPair(w http.ResponseWriter, clientID, scope string) {
 	}
 
 	s.mu.Lock()
-	s.tokens[access] = &accessToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(accessTokenTTL)}
+	// Re-check the client under the same lock as the insert: the caller
+	// authenticated it earlier in a separate critical section, so a revoke
+	// landing in between must not still mint (and persist) a fresh token pair.
+	if _, ok := s.clients[clientID]; !ok {
+		s.mu.Unlock()
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client is not registered")
+		return
+	}
+	now := time.Now()
+	if connectedAt.IsZero() {
+		connectedAt = now
+	}
+	s.tokens[access] = &accessToken{ClientID: clientID, Scope: scope, ExpiresAt: now.Add(accessTokenTTL)}
 	// Store the token hashed, not raw -- see hashToken's doc comment. Only
 	// this response body ever carries the raw value; from here on the
 	// server (memory and disk alike) only ever holds its SHA-256 digest.
-	s.refreshTokens[hashToken(refresh)] = &refreshToken{ClientID: clientID, Scope: scope, ExpiresAt: time.Now().Add(refreshTTL)}
+	s.refreshTokens[hashToken(refresh)] = &refreshToken{
+		ClientID:    clientID,
+		Scope:       scope,
+		ExpiresAt:   now.Add(refreshTTL),
+		ConnectedAt: connectedAt,
+		IssuedAt:    now,
+		LastUsedAt:  now, // the grant that minted this token is itself a use
+	}
 	s.mu.Unlock()
-	s.persistRefreshTokens()
+	if err := s.persistRefreshTokens(); err != nil {
+		log.Printf("oh-my-graph/auth: token: %v", err) // best-effort: never fail /token over disk errors
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  access,

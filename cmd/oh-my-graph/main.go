@@ -29,7 +29,7 @@ func main() {
 
 	port := flag.Int("port", 7780, "HTTP listen port")
 	data := flag.String("data", "", "data directory (default: ~/.oh-my-graph)")
-	authEnabled := flag.Bool("auth", false, "require owner auth (OAuth 2.1 DCR+PKCE bearer on /mcp and /omg-mcp, HTTP Basic on the viz UI) using a shared passphrase; reads OMG_ISSUER and OMG_OWNER_PASSPHRASE")
+	authEnabled := flag.Bool("auth", false, "require owner auth (OAuth 2.1 DCR+PKCE bearer on /mcp and /omg-mcp, owner-session cookie login on the viz UI) using a shared passphrase; reads OMG_ISSUER and OMG_OWNER_PASSPHRASE")
 	flag.Parse()
 
 	dir := resolveDir(*data)
@@ -39,7 +39,7 @@ func main() {
 	mcpServer := mcp.NewServer(mgr)
 
 	var mcpHandler http.Handler = mcpServer
-	var vizHandler http.Handler = viz.NewHandler(mgr)
+	var vizHandler http.Handler
 	if *authEnabled {
 		issuer := os.Getenv("OMG_ISSUER")
 		passphrase := os.Getenv("OMG_OWNER_PASSPHRASE")
@@ -56,8 +56,12 @@ func main() {
 		mcpHandler = authSrv.RequireBearer(mcpServer)
 		// The viz UI is browser-facing, not an MCP client, so it can't carry a
 		// Bearer header on plain navigation — gate it with a session cookie
-		// from /login instead, using the same owner passphrase.
-		vizHandler = authSrv.RequireOwnerSession(vizHandler)
+		// from /login instead, using the same owner passphrase. The Connected
+		// Agents page needs the auth server, so the handler is built with it
+		// here, before the session wrap.
+		vizHandler = authSrv.RequireOwnerSession(viz.NewHandler(mgr, viz.WithAgents(authSrv)))
+	} else {
+		vizHandler = viz.NewHandler(mgr)
 	}
 
 	mux.Handle("/mcp", mcpHandler)
@@ -72,7 +76,7 @@ func main() {
 	// The PWA manifest/icons must stay reachable without auth even when
 	// --auth gates the rest of the viz UI (see viz.PWAAssets doc comment) --
 	// registered directly on mux so they win over "/" regardless of the
-	// Basic Auth wrapping below.
+	// owner-session wrapping below.
 	pwaAssets := viz.PWAAssets()
 	mux.Handle("/manifest.json", pwaAssets)
 	mux.Handle("/icon-192.png", pwaAssets)
