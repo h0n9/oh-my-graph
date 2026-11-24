@@ -177,11 +177,11 @@ func (h *Handler) agentsPage(w http.ResponseWriter, r *http.Request) {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 1_000_000 {
 			switch n {
 			case 0:
-				notice = "No stale registrations to remove."
+				notice = "Nothing to prune yet. Inactive agents from the last hour are kept."
 			case 1:
-				notice = "Removed 1 stale registration."
+				notice = "Pruned 1 inactive agent."
 			default:
-				notice = fmt.Sprintf("Removed %d stale registrations.", n)
+				notice = fmt.Sprintf("Pruned %d inactive agents.", n)
 			}
 		}
 	}
@@ -226,7 +226,7 @@ func (h *Handler) changeAgents(w http.ResponseWriter, r *http.Request) {
 		n, err := h.agents.PruneStale()
 		if err != nil {
 			log.Printf("oh-my-graph: prune agents: %v", err)
-			h.serveAgents(w, http.StatusInternalServerError, "Stale registrations removed for now, but the change could not be saved; they may return after a restart.", "")
+			h.serveAgents(w, http.StatusInternalServerError, "Inactive agents were pruned for now, but the change could not be saved; they may return after a restart.", "")
 			return
 		}
 		target = "/agents?pruned=" + strconv.Itoa(n)

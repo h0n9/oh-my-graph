@@ -186,15 +186,24 @@ func TestAgentsPrune(t *testing.T) {
 		t.Fatalf("redirect = %q", got)
 	}
 	body := request("GET", "/agents?pruned=3", "", "", 200).Body.String()
-	if !strings.Contains(body, "Removed 3 stale registrations.") {
+	if !strings.Contains(body, "Pruned 3 inactive agents.") {
 		t.Fatal("prune notice missing")
 	}
-	if body := request("GET", "/agents?pruned=junk", "", "", 200).Body.String(); strings.Contains(body, "Removed") {
+	if body := request("GET", "/agents?pruned=junk", "", "", 200).Body.String(); strings.Contains(body, "Pruned") || strings.Contains(body, "Nothing to prune") {
 		t.Fatal("invalid pruned value must not render a notice")
+	}
+	if body := request("GET", "/agents?pruned=1", "", "", 200).Body.String(); !strings.Contains(body, "Pruned 1 inactive agent.") {
+		t.Fatal("singular prune notice missing")
+	}
+	if body := request("GET", "/agents?pruned=0", "", "", 200).Body.String(); !strings.Contains(body, "Nothing to prune yet.") {
+		t.Fatal("zero prune notice missing")
 	}
 
 	f.pruneErr = errors.New("disk full")
-	request("POST", "/agents/prune", "", "same-origin", 500)
+	body = request("POST", "/agents/prune", "", "same-origin", 500).Body.String()
+	if !strings.Contains(body, "were pruned for now") || strings.Contains(body, "disk full") {
+		t.Fatalf("prune failure body = %q", body)
+	}
 }
 
 func TestAgentsPageNonGetIs405(t *testing.T) {

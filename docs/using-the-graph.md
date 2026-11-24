@@ -15,7 +15,7 @@ When the server runs with [`--auth`](setup.md#security-and-authentication), the 
 - **Status** — `active`, `idle Nd` (live session, unused for more than 24 hours), `expired`, or `no tokens` (registered but never finished authorizing).
 - **Connected**, **last used**, and **session expires** — *unknown* for connections made before the server tracked these. After a server restart, *last used* is only approximate for about an hour.
 
-Use **Revoke** to cut off a client right away: its tokens and pending authorization codes are invalidated and its registration is removed. A request that is already in progress finishes, and every request after it is rejected. Some clients cannot recover from an unknown registration, so you may need to remove and add that connector again, and you may be revoking the agent you are using right now. Use **Remove** for entries that have no live session, or **Prune stale registrations** to remove all such entries older than an hour. Pruning never removes a client that is still mid-authorization.
+Use **Revoke** to cut off a client right away: its tokens and pending authorization codes are invalidated and its registration is removed. A request that is already in progress finishes, and every request after it is rejected. Some clients cannot recover from an unknown registration, so you may need to remove and add that connector again, and you may be revoking the agent you are using right now. Use **Remove** for entries that have no live session, or **Prune inactive agents** to remove all such entries older than an hour. Pruning never removes a client that is still mid-authorization.
 
 ## Continue work across assistants
 
