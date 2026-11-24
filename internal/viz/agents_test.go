@@ -299,6 +299,16 @@ func TestAgentsPageHeadAndLabels(t *testing.T) {
 	if !strings.Contains(body, "Dates are UTC.") {
 		t.Error("page should say dates are UTC")
 	}
+	if !strings.Contains(body, "Prune inactive agents") || !strings.Contains(body, "Prune removes inactive agents older than an hour.") {
+		t.Error("with inactive agents, the page should offer pruning and explain it")
+	}
+
+	// No inactive agents: no prune link, and no sentence about a link that isn't there.
+	_, request = newAgentsHandler(t, &fakeAgents{conns: sampleConns()[:2]})
+	body = request("GET", "/agents", "", "", 200).Body.String()
+	if strings.Contains(body, "Prune inactive agents") || strings.Contains(body, "Prune removes") {
+		t.Errorf("no inactive agents: page should not offer or explain pruning, body: %s", body)
+	}
 }
 
 // CrossOriginProtection lets requests with neither Sec-Fetch-Site nor Origin

@@ -58,6 +58,7 @@
   summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 12px; }
 
   .foot { color: var(--muted); font-size: 12px; margin-top: 20px; }
+  .foot p + p { margin-top: 6px; }
   .prune { margin-top: 20px; }
   .prune button {
     border: 0;
@@ -93,7 +94,11 @@
   <button type="submit" title="Removes inactive agents older than an hour">Prune inactive agents</button>
 </form>
 {{end}}
-<p class="foot">Revoking invalidates a client's tokens immediately and removes its registration. The client must re-authorize with your passphrase, and its connector may need to be removed and added again. Pruning removes inactive agents older than an hour. Last used is approximate for about an hour after a server restart. Dates are UTC.</p>
+<div class="foot">
+  <p>Revoke cuts an agent off at once. It must re-authorize, and you may need to re-add its connector.</p>
+  {{if .Inactive}}<p>Prune removes inactive agents older than an hour.</p>{{end}}
+  <p>After a restart, "last used" may be up to an hour behind. Dates are UTC.</p>
+</div>
 {{else}}
 <p class="empty">No connected agents.</p>
 {{end}}
