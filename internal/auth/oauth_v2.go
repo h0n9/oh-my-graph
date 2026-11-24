@@ -295,28 +295,28 @@ func (s *Server) loadRefreshTokens() {
 		return
 	}
 
-	salt := make([]byte, saltSize)
+	var salt []byte
 	data, err := os.ReadFile(s.refreshTokensFile)
 	switch {
 	case err != nil && !os.IsNotExist(err):
 		log.Printf("oh-my-graph/auth: loadRefreshTokens: %v", err)
 		fallthrough
 	case err != nil:
-		if _, rerr := rand.Read(salt); rerr != nil {
-			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", rerr)
+		if salt, err = newSalt(); err != nil {
+			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", err)
 			return
 		}
 	case len(data) < saltSize:
 		log.Printf("oh-my-graph/auth: loadRefreshTokens: %s: file too short, starting empty", s.refreshTokensFile)
-		if _, rerr := rand.Read(salt); rerr != nil {
-			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", rerr)
+		if salt, err = newSalt(); err != nil {
+			log.Printf("oh-my-graph/auth: loadRefreshTokens: generate salt: %v", err)
 			return
 		}
 	default:
-		copy(salt, data[:saltSize])
+		salt = append([]byte(nil), data[:saltSize]...)
 	}
 
-	key, err := deriveKey(s.ownerPassphrase, salt)
+	key, err := deriveKeyFunc(s.ownerPassphrase, salt)
 	if err != nil {
 		log.Printf("oh-my-graph/auth: loadRefreshTokens: derive key: %v", err)
 		return
