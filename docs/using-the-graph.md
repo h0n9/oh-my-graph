@@ -12,6 +12,8 @@ Use the **pencil icon** to rename a topic or the **archive box icon** to archive
 
 With [`--auth`](setup.md#security-and-authentication), the topic list header shows an **N agents** link (N counts agents with a live session). It opens **`/agents`**, a page of every AI client that has registered with your server. Without `--auth`, the page does not exist.
 
+![The agents page with one active agent, one inactive agent with no tokens, and a Prune inactive agents link](../assets/connected-agents.png)
+
 Each card shows:
 
 - **Status**: `active`, `idle Nd` (unused for over 24 hours), `expired`, or `no tokens` (registered but holds no tokens, for example it never finished authorizing).
@@ -23,9 +25,11 @@ What you can do:
 - **Remove** is the same for agents with no live session, with the same dialog.
 - **Prune inactive agents** removes every inactive agent older than an hour. It never touches an agent that is mid-authorization. It runs only when you click it, and it does not ask first.
 
+![The Revoke confirmation dialog for an agent named Claude Code, warning that you may be revoking the agent you are using](../assets/revoke-agent-dialog.png)
+
 After a revoke, the agent must authorize again with your passphrase. Some clients cannot recover on their own, so you may need to remove and re-add the connector. You may also be revoking the agent you are using right now.
 
-After a server restart, *last used* can be up to an hour behind.
+After a server restart, *last used* may be up to an hour behind.
 
 ## Continue work across assistants
 
