@@ -62,8 +62,8 @@
   {{if .AgentsEnabled}}<a class="pill" href="/agents"><span class="dot" aria-hidden="true"></span>{{.AgentCount}} {{if eq .AgentCount 1}}agent{{else}}agents{{end}}</a>{{end}}
 </header>
 <nav aria-label="Topic status">
-  <a href="/"{{if not .Archived}} aria-current="page"{{end}}>Topics</a>
-  <a href="/?tab=archived"{{if .Archived}} aria-current="page"{{end}}>Archived</a>
+  <a href="/topics"{{if not .Archived}} aria-current="page"{{end}}>Topics</a>
+  <a href="/topics?tab=archived"{{if .Archived}} aria-current="page"{{end}}>Archived</a>
 </nav>
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 {{if .Topics}}

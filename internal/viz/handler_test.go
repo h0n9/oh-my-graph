@@ -113,7 +113,7 @@ func TestTopicManagementRoutes(t *testing.T) {
 	}
 	request("POST", "/topics/rename", "topic=topic&new_name=invalid+name", "same-origin", 400)
 	request("POST", "/topics/rename", "topic=missing&new_name=missing", "same-origin", 404)
-	if got := request("POST", "/topics/rename", "topic=topic&new_name=renamed", "same-origin", 303).Header().Get("Location"); got != "/" {
+	if got := request("POST", "/topics/rename", "topic=topic&new_name=renamed", "same-origin", 303).Header().Get("Location"); got != "/topics" {
 		t.Fatalf("rename redirect: %s", got)
 	}
 	request("GET", "/api/graph?topic=topic", "", "", 404)
@@ -125,13 +125,13 @@ func TestTopicManagementRoutes(t *testing.T) {
 	request("POST", "/topics/archive", "topic=renamed", "same-origin", 303)
 	request("POST", "/topics/rename", "topic=renamed&new_name=renamed", "same-origin", 409)
 	request("GET", "/api/graph?topic=renamed", "", "", 409)
-	active := request("GET", "/", "", "", 200).Body.String()
-	archive := request("GET", "/?tab=archived", "", "", 200).Body.String()
+	active := request("GET", "/topics", "", "", 200).Body.String()
+	archive := request("GET", "/topics?tab=archived", "", "", 200).Body.String()
 	if strings.Contains(active, "topic=renamed") || !strings.Contains(archive, `aria-label="Restore renamed"`) ||
 		strings.Contains(archive, "topic=renamed") {
 		t.Fatal("archived topic must appear only as a restore action")
 	}
-	if got := request("POST", "/topics/restore", "topic=renamed", "same-origin", 303).Header().Get("Location"); got != "/?tab=archived" {
+	if got := request("POST", "/topics/restore", "topic=renamed", "same-origin", 303).Header().Get("Location"); got != "/topics?tab=archived" {
 		t.Fatalf("restore redirect: %s", got)
 	}
 	graphInstance("renamed")
@@ -150,15 +150,62 @@ func TestTopicManagementRoutes(t *testing.T) {
 	if token == "" {
 		t.Fatal("archived topic did not receive a delete token")
 	}
-	archivedPage := request("GET", "/?tab=archived", "", "", 200).Body.String()
+	archivedPage := request("GET", "/topics?tab=archived", "", "", 200).Body.String()
 	if !strings.Contains(archivedPage, `data-delete-token="`+token+`"`) {
 		t.Fatal("archived page did not render the token")
 	}
 	form := "topic=renamed&delete_token=" + token
 	request("POST", "/topics/delete", form, "cross-site", 403)
 	request("POST", "/topics/delete", "topic=renamed&delete_token=stale", "same-origin", 409)
-	if got := request("POST", "/topics/delete", form, "same-origin", 303).Header().Get("Location"); got != "/?tab=archived" {
+	if got := request("POST", "/topics/delete", form, "same-origin", 303).Header().Get("Location"); got != "/topics?tab=archived" {
 		t.Fatalf("delete redirect: %s", got)
 	}
 	request("POST", "/topics/delete", form, "same-origin", 404)
+}
+
+func TestRootRedirectsToTopics(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	h := NewHandler(mgr)
+
+	for _, tc := range []struct {
+		method, path string
+		code         int
+		location     string
+	}{
+		{"GET", "/", 302, "/topics"},
+		{"HEAD", "/", 302, "/topics"},
+		{"POST", "/", 302, "/topics"},
+		{"GET", "/topics", 200, ""},
+		{"GET", "/topics/", 404, ""},
+		{"GET", "/index", 404, ""},
+		{"GET", "/index.html", 404, ""},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != tc.code {
+			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, rec.Code, tc.code)
+		}
+		if got := rec.Header().Get("Location"); got != tc.location {
+			t.Errorf("%s %s Location = %q, want %q", tc.method, tc.path, got, tc.location)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/topics", nil))
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("/topics Cache-Control = %q", rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestTopicErrorPageKeepsArchivedTab(t *testing.T) {
+	mgr := graph.NewManager(t.TempDir())
+	defer mgr.Close()
+	req := httptest.NewRequest("POST", "/topics/restore", strings.NewReader("topic=missing"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	NewHandler(mgr).ServeHTTP(rec, req)
+	if rec.Code != 404 || !strings.Contains(rec.Body.String(), `href="/topics?tab=archived" aria-current="page"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }

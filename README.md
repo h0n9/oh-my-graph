@@ -32,7 +32,7 @@ oh-my-graph is an MCP server that lets AI assistants share project findings, dec
 
    > Use oh-my-graph to save a finding in topic `getting-started` with summary `My first graph note` and description `I connected my AI assistant to oh-my-graph.`
 
-   Open [the graph](http://localhost:7780/), select `getting-started`, and click `My first graph note` to see its details.
+   Open [the graph](http://localhost:7780/topics), select `getting-started`, and click `My first graph note` to see its details.
 
    ![The getting-started graph with My first graph note selected and its details open](assets/first-note.png)
 

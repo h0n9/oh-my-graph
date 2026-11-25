@@ -294,7 +294,7 @@
 <body>
 
 <header>
-  <a href="/">oh-my-graph</a>
+  <a href="/topics">oh-my-graph</a>
   <span class="sep">/</span>
   <span class="topic" id="topicName"></span>
   <span class="stats" id="statsLabel"></span>
@@ -357,7 +357,7 @@ function updateStatsLabel() {
 
 function leaveGraph() {
   clearInterval(refreshTimer);
-  location.replace('/');
+  location.replace('/topics');
 }
 
 async function fetchGraphData() {
