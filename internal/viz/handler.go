@@ -163,20 +163,38 @@ func topicErrorStatus(err error) int {
 	}
 }
 
-func (h *Handler) changeTopic(w http.ResponseWriter, r *http.Request) {
+// maxFormBytes caps the request body of every form POST.
+const maxFormBytes = 4 << 10
+
+// acceptFormPost reports whether r is a POST that passes the cross-origin
+// check and whose body (at most maxFormBytes) parses as a form. When it
+// returns false a response has already been written: a 405 (with Allow: POST)
+// or 403 by acceptFormPost itself, or by onBadForm, which must write the
+// response when the form can't be read.
+// noun names what the form changes in the 403 message ("topic", "agent").
+func (h *Handler) acceptFormPost(w http.ResponseWriter, r *http.Request, noun string, onBadForm func()) bool {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+		return false
 	}
 	if err := h.csrf.Check(r); err != nil {
-		http.Error(w, "cross-origin topic changes are forbidden", http.StatusForbidden)
-		return
+		http.Error(w, "cross-origin "+noun+" changes are forbidden", http.StatusForbidden)
+		return false
 	}
-	archived := r.URL.Path == "/topics/restore" || r.URL.Path == "/topics/delete"
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	if err := r.ParseForm(); err != nil {
+		onBadForm()
+		return false
+	}
+	return true
+}
+
+func (h *Handler) changeTopic(w http.ResponseWriter, r *http.Request) {
+	archived := r.URL.Path == "/topics/restore" || r.URL.Path == "/topics/delete"
+	if !h.acceptFormPost(w, r, "topic", func() {
 		h.serveIndex(w, archived, http.StatusBadRequest, "Invalid topic form.")
+	}) {
 		return
 	}
 

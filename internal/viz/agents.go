@@ -189,18 +189,9 @@ func (h *Handler) agentsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) changeAgents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if err := h.csrf.Check(r); err != nil {
-		http.Error(w, "cross-origin agent changes are forbidden", http.StatusForbidden)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
-	if err := r.ParseForm(); err != nil {
+	if !h.acceptFormPost(w, r, "agent", func() {
 		h.serveAgents(w, http.StatusBadRequest, "Invalid agent form.", "")
+	}) {
 		return
 	}
 
