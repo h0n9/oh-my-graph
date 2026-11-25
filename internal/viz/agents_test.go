@@ -217,7 +217,7 @@ func TestAgentsPageNonGetIs405(t *testing.T) {
 func TestIndexShowsAgentsLinkOnlyWhenEnabled(t *testing.T) {
 	f := &fakeAgents{conns: sampleConns()} // 2 connections have live tokens
 	_, request := newAgentsHandler(t, f)
-	body := request("GET", "/", "", "", 200).Body.String()
+	body := request("GET", "/topics", "", "", 200).Body.String()
 	if !strings.Contains(body, `href="/agents"`) || !strings.Contains(body, "2 agents") {
 		t.Fatalf("topics page should link to /agents with the live count: %s", body)
 	}
@@ -233,7 +233,7 @@ func TestIndexShowsAgentsLinkOnlyWhenEnabled(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/topics", nil))
 	if strings.Contains(rec.Body.String(), "/agents") {
 		t.Fatal("topics page links to /agents without a provider")
 	}
@@ -250,7 +250,7 @@ func TestTopicsPageStillRendersAfterSharedTemplateRefactor(t *testing.T) {
 	}
 	release()
 	rec := httptest.NewRecorder()
-	NewHandler(mgr).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	NewHandler(mgr).ServeHTTP(rec, httptest.NewRequest("GET", "/topics", nil))
 	body := rec.Body.String()
 	if len(body) == 0 {
 		t.Fatal("topics page body is empty")

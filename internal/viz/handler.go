@@ -56,6 +56,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/", "":
+		http.Redirect(w, r, "/topics", http.StatusFound)
+	case "/topics":
 		h.serveIndex(w, r.URL.Query().Get("tab") == "archived", http.StatusOK, "")
 	case "/graph":
 		http.ServeFileFS(w, r, staticFS, "static/graph.html")
@@ -204,9 +206,9 @@ func (h *Handler) changeTopic(w http.ResponseWriter, r *http.Request) {
 		h.serveIndex(w, archived, status, message)
 		return
 	}
-	target := "/"
+	target := "/topics"
 	if archived {
-		target = "/?tab=archived"
+		target = "/topics?tab=archived"
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
